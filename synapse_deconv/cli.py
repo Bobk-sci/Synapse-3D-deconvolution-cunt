@@ -88,6 +88,8 @@ def _log_parameters(cfg: Config) -> None:
 def cmd_count(args: argparse.Namespace) -> int:
     """Detect puncta, colocalise them and count synapses."""
     cfg = load_config(args.config)
+    if args.input:
+        cfg.input.directory = args.input
     if args.output:
         cfg.output.directory = args.output
     if args.threshold_sigma:
@@ -577,6 +579,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     count.add_argument("config")
     count.add_argument("--file", help="process only this stack")
+    count.add_argument("--input",
+                       help="folder of DECONVOLVED stacks to count. input.directory "
+                            "normally points at the raw acquisitions, which are not "
+                            "what should be counted")
     count.add_argument("--output", help="override output.directory")
     count.add_argument("--threshold-sigma", type=float,
                        help="override detection.threshold_sigma")
