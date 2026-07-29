@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
+    "scikit-image>=0.20",
     "tifffile>=2023.7.10",
     "matplotlib>=3.7",
     "pyyaml>=6.0",

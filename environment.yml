@@ -15,7 +15,7 @@ dependencies:
   - python=3.11
   - numpy>=1.24
   - scipy>=1.10
-  - scikit-image>=0.20      # utilise par les scripts d'analyse, pas par le coeur
+  - scikit-image>=0.20      # segmentation des puncta (watershed, regionprops)
   - tifffile>=2023.7.10
   - matplotlib-base>=3.7
   - pyyaml>=6.0
