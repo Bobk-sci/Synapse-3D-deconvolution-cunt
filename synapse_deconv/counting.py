@@ -25,6 +25,7 @@ from .colocalization import (
     PairingResult,
     chance_pairing_rate,
     estimate_channel_offset,
+    nearest_neighbour_profile,
     pair_by_contact,
     pair_puncta,
     resolve_exclusive_partners,
@@ -364,8 +365,37 @@ def count_stack(cfg: Config, source: Path) -> CountResult:
                     "tolerance; tighten the tolerance or treat the count as an upper bound"
                 )
 
+    profiles: dict[str, dict] = {}
+    if coloc.chance_randomisations > 0 and coloc.criterion == "distance":
+        extent = np.array(stack.spatial_shape) * np.array(voxel)
+        for key, post_name in (("excitatory", exc_name), ("inhibitory", inh_name)):
+            profile = nearest_neighbour_profile(
+                detections[pre_name].centroids_um, detections[post_name].centroids_um,
+                extent, n_randomisations=coloc.chance_randomisations,
+            )
+            profiles[key] = profile
+            if profile["observed"]:
+                cells = [
+                    f"r<={r:.2f}:x{e:g}"
+                    for r, e in zip(profile["radius_um"], profile["enrichment"])
+                    if e is not None
+                ][:6]
+                logger.info("  apposition %s vs %s (cumulative enrichment vs chance): %s",
+                            pre_name, post_name, "  ".join(cells) or "too few puncta")
+                usable = [e for e in profile["enrichment"] if e is not None]
+                first = usable[0] if usable else None
+                if first is not None and first < 2.0:
+                    result.warnings.append(
+                        f"{pre_name}/{post_name}: nearest-neighbour enrichment is only "
+                        f"{first:g} in the closest bin. The two channels show no clear "
+                        "apposition, so no tolerance will give a meaningful synapse "
+                        "count -- check the marker assignment and the detection "
+                        "threshold before trusting these numbers"
+                    )
+
     result.synapses = {
         "chance": chance,
+        "apposition_profile": profiles,
         "channel_offsets": offsets,
         "presynaptic_channel": pre_name,
         "excitatory_channel": exc_name,

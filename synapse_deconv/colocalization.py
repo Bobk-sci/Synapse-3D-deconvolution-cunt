@@ -32,6 +32,7 @@ __all__ = [
     "PairingResult",
     "chance_pairing_rate",
     "estimate_channel_offset",
+    "nearest_neighbour_profile",
     "pair_by_contact",
     "pair_puncta",
     "resolve_exclusive_partners",
@@ -284,6 +285,71 @@ def estimate_channel_offset(
         # real. Well above 1 the median is averaging unrelated puncta and the
         # "shift" is finite-sample noise, not an instrumental offset.
         "scatter_ratio": scatter / norm if norm > 0 else float("inf"),
+    }
+
+
+def nearest_neighbour_profile(
+    pre_centroids_um: np.ndarray,
+    post_centroids_um: np.ndarray,
+    extent_um: np.ndarray,
+    *,
+    max_distance_um: float = 1.5,
+    n_bins: int = 15,
+    n_randomisations: int = 10,
+    min_expected: float = 5.0,
+    seed: int = 0,
+) -> dict[str, list]:
+    """Fraction of presynaptic puncta with a partner within r, against chance.
+
+    Answers the question a fixed tolerance cannot: **is there real apposition,
+    and over what distance?** For every candidate tolerance r the profile gives
+    how many presynaptic puncta have a postsynaptic neighbour within r, and how
+    many would by chance if one channel were randomly translated.
+
+    The counts are **cumulative**, not binned. A per-bin ratio is unusable at
+    short distance, where both counts are tiny: a bin holding 4 observed against
+    0.2 expected reports an enrichment of 20 that is pure small-number noise.
+    The cumulative form is monotone, stable, and is exactly the quantity a
+    tolerance selects.
+
+    Reading it: enrichment well above 1 at short r that decays towards 1 means
+    the tolerance can be read off the curve -- take r just before the decay. A
+    curve flat at 1 everywhere means the channels are not associated and no
+    tolerance will produce a meaningful count. Ratios computed from fewer than
+    ``min_expected`` chance counts are returned as None rather than a number
+    that only reflects sampling noise.
+    """
+    from scipy.spatial import cKDTree
+
+    pre = np.asarray(pre_centroids_um, dtype=float).reshape(-1, 3)
+    post = np.asarray(post_centroids_um, dtype=float).reshape(-1, 3)
+    extent = np.asarray(extent_um, dtype=float)
+    radii = np.linspace(max_distance_um / n_bins, max_distance_um, n_bins)
+    empty = {"radius_um": radii.tolist(), "observed": [], "chance": [],
+             "enrichment": []}
+    if len(pre) < 10 or len(post) < 10 or np.any(extent <= 0):
+        return empty
+
+    def cumulative(points: np.ndarray) -> np.ndarray:
+        distances, _ = cKDTree(points).query(pre)
+        return np.array([float((distances <= r).sum()) for r in radii])
+
+    observed = cumulative(post)
+    rng = np.random.default_rng(seed)
+    chance = np.mean(
+        [cumulative((post + rng.uniform(0, extent)) % extent)
+         for _ in range(n_randomisations)],
+        axis=0,
+    )
+    enrichment = [
+        round(float(o / c), 3) if c >= min_expected else None
+        for o, c in zip(observed, chance)
+    ]
+    return {
+        "radius_um": [round(float(r), 3) for r in radii],
+        "observed": observed.tolist(),
+        "chance": [round(float(c), 2) for c in chance],
+        "enrichment": enrichment,
     }
 
 

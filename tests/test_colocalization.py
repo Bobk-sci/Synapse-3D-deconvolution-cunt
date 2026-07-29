@@ -8,6 +8,7 @@ import pytest
 from synapse_deconv.colocalization import (
     chance_pairing_rate,
     estimate_channel_offset,
+    nearest_neighbour_profile,
     pair_by_contact,
     pair_puncta,
     resolve_exclusive_partners,
@@ -215,3 +216,46 @@ def test_an_offset_collapses_the_pairing_and_correction_restores_it():
 
     assert without.count < 0.5 * len(pre)        # pairing has collapsed
     assert after.count > 0.95 * len(pre)         # and is restored
+
+
+def test_apposition_profile_finds_the_true_distance():
+    """The enrichment peak must sit on the real apposition distance."""
+    rng = np.random.default_rng(20)
+    extent = np.array([9.0, 25.0, 25.0])
+    pre = rng.uniform(0, extent, size=(400, 3))
+    cleft = 0.15
+    direction = rng.normal(size=pre.shape)
+    direction /= np.linalg.norm(direction, axis=1)[:, None]
+    post = pre + direction * cleft
+
+    profile = nearest_neighbour_profile(pre, post, extent, max_distance_um=1.5,
+                                        n_bins=15, n_randomisations=5)
+    radii = profile["radius_um"]
+    enrichment = profile["enrichment"]
+    # Strong enrichment at a radius just above the cleft, decaying to ~1.
+    close = next(e for r, e in zip(radii, enrichment)
+                 if e is not None and r >= cleft)
+    assert close > 10, close
+    far = [e for r, e in zip(radii, enrichment) if e is not None and r >= 1.2]
+    assert far and max(far) < 3
+
+
+def test_apposition_profile_is_flat_for_unrelated_channels():
+    """No association -> no tolerance can rescue the count, and it shows."""
+    rng = np.random.default_rng(21)
+    extent = np.array([9.0, 25.0, 25.0])
+    pre = rng.uniform(0, extent, size=(400, 3))
+    post = rng.uniform(0, extent, size=(400, 3))
+
+    profile = nearest_neighbour_profile(pre, post, extent, n_randomisations=5)
+    enrichment = [e for e in profile["enrichment"] if e is not None]
+    assert enrichment
+    # Cumulative counts are stable, so an unrelated pair stays near 1 throughout.
+    assert max(enrichment) < 2.0, enrichment
+
+
+def test_apposition_profile_handles_too_few_puncta():
+    extent = np.array([9.0, 25.0, 25.0])
+    profile = nearest_neighbour_profile(np.zeros((3, 3)), np.zeros((3, 3)), extent)
+    assert profile["observed"] == []
+    assert profile["radius_um"]
