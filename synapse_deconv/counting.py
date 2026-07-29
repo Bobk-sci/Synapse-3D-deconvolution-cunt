@@ -468,6 +468,32 @@ def count_stack(cfg: Config, source: Path) -> CountResult:
                 ][:6]
                 logger.info("  apposition %s vs %s (cumulative enrichment vs chance): %s",
                             pre_name, post_name, "  ".join(cells) or "too few puncta")
+                coverage = [
+                    f"r<={r:.2f}:{100 * f:.0f}%"
+                    for r, f in zip(profile["radius_um"], profile["fraction_of_pre"])
+                ][1:7]
+                logger.info("           %s with ANY %s within r: %s",
+                            pre_name, post_name, "  ".join(coverage))
+                # A 1.5 um sphere holds 14 um3. At the ~1 synapse/um3 of real
+                # neuropile, essentially every presynaptic punctum has some
+                # postsynaptic punctum that far away, whether or not they form a
+                # synapse. Coverage well below 1 at that radius therefore means
+                # the postsynaptic channel is under-detected, and it caps the
+                # pairing rate directly: a partner that was never detected
+                # cannot be paired at any tolerance.
+                reach = profile["fraction_of_pre"][-1]
+                if reach < 0.5:
+                    result.warnings.append(
+                        f"only {100 * reach:.0f}% of {pre_name} puncta have any "
+                        f"{post_name} punctum within {profile['radius_um'][-1]:g} um. "
+                        "At real synapse densities that fraction should approach 100%, "
+                        f"so {post_name} is severely under-detected and the pairing "
+                        "rate is limited by detection sensitivity, not by the "
+                        "tolerance. Lowering the tolerance or the threshold will not "
+                        "fix this -- the missing puncta have to be recovered upstream "
+                        "(labelling intensity, refractive index matching, deconvolution)"
+                    )
+
                 usable = [e for e in profile["enrichment"] if e is not None]
                 first = usable[0] if usable else None
                 if first is not None and first < 2.0:

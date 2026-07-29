@@ -326,7 +326,7 @@ def nearest_neighbour_profile(
     extent = np.asarray(extent_um, dtype=float)
     radii = np.linspace(max_distance_um / n_bins, max_distance_um, n_bins)
     empty = {"radius_um": radii.tolist(), "observed": [], "chance": [],
-             "enrichment": []}
+             "enrichment": [], "fraction_of_pre": []}
     if len(pre) < 10 or len(post) < 10 or np.any(extent <= 0):
         return empty
 
@@ -350,6 +350,14 @@ def nearest_neighbour_profile(
         "observed": observed.tolist(),
         "chance": [round(float(c), 2) for c in chance],
         "enrichment": enrichment,
+        # The raw coverage, which the enrichment ratio hides: what share of the
+        # presynaptic puncta have ANY postsynaptic punctum within r. This is the
+        # quantity the literature reports (most Bassoon puncta appose a PSD-95),
+        # and it separates the two ways a synapse count can be too low. If
+        # coverage stays low at every radius, partners are missing from the
+        # detection and no tolerance recovers them; if coverage is high but only
+        # at large r, the tolerance or the channel registration is the problem.
+        "fraction_of_pre": [round(float(o / len(pre)), 4) for o in observed],
     }
 
 

@@ -354,3 +354,52 @@ def test_specific_enrichment_of_an_empty_profile_is_empty():
     from synapse_deconv.counting import specific_enrichment
 
     assert specific_enrichment({"enrichment": []}, {"enrichment": [1.0]}) == []
+
+
+def test_profile_reports_coverage_not_only_enrichment():
+    """The share of presynaptic puncta with any partner within r.
+
+    Enrichment is a ratio and hides the absolute level: a pair can be x8
+    'enriched' while only 5% of the presynaptic puncta have any partner at all,
+    which is a detection problem no tolerance can fix.
+    """
+    rng = np.random.default_rng(5)
+    pre = rng.uniform(0, EXTENT, size=(500, 3))
+    post = rng.uniform(0, EXTENT, size=(500, 3))
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=3)
+
+    fractions = profile["fraction_of_pre"]
+    assert len(fractions) == len(profile["radius_um"])
+    assert all(0.0 <= f <= 1.0 for f in fractions)
+    assert fractions == sorted(fractions), "a cumulative fraction cannot decrease"
+    assert fractions[-1] > fractions[0]
+
+
+def test_coverage_is_one_when_every_punctum_has_a_partner():
+    pre = np.array([[1.0, 2.0, 3.0]] * 12) + np.arange(12)[:, None] * 0.9
+    post = pre + 0.05
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=3)
+    assert profile["fraction_of_pre"][0] == pytest.approx(1.0)
+
+
+def test_coverage_stays_low_when_partners_are_missing():
+    """Most partners undetected: coverage saturates far below 1.
+
+    This is the signature to look for -- the enrichment can still be large,
+    because the few real pairs are genuinely close, while the count is capped
+    by everything the detection missed.
+    """
+    rng = np.random.default_rng(6)
+    pre = rng.uniform(0, EXTENT, size=(400, 3))
+    post = pre[:20] + 0.05                   # only 20 of the 400 have a partner
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=3)
+    assert profile["fraction_of_pre"][2] < 0.10
+    assert profile["fraction_of_pre"][-1] < 0.5
+
+
+def test_empty_profile_still_carries_every_key():
+    """Callers index the profile; a short-circuit must not drop a column."""
+    tiny = np.zeros((3, 3))
+    profile = nearest_neighbour_profile(tiny, tiny, EXTENT)
+    assert set(profile) == {"radius_um", "observed", "chance", "enrichment",
+                            "fraction_of_pre"}
