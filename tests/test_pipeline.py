@@ -222,3 +222,36 @@ def test_config_file_round_trip_drives_the_batch(tmp_path, raw_dir):
 
     assert main(["run", str(path)]) == 0
     assert len(list((tmp_path / "out").glob("*_decon.ome.tif"))) == 2
+
+
+def test_depth_command_runs(tmp_path, raw_dir, capsys):
+    """The decision-support command must work on a real config file."""
+    cfg = make_config(tmp_path)
+    path = tmp_path / "run.yaml"
+    payload = cfg.to_dict()
+    payload.pop("source_path")
+    path.write_text(yaml.safe_dump(payload))
+
+    from synapse_deconv.cli import main
+
+    assert main(["depth", str(path), "--depths", "0", "10",
+                 "--true-depth", "10", "--psf-size", "13"]) == 0
+    out = capsys.readouterr().out
+    assert "Depth sensitivity" in out
+    assert "axial concentration" in out
+
+
+def test_depth_command_psf_only(tmp_path, raw_dir, capsys):
+    cfg = make_config(tmp_path)
+    path = tmp_path / "run.yaml"
+    payload = cfg.to_dict()
+    payload.pop("source_path")
+    path.write_text(yaml.safe_dump(payload))
+
+    from synapse_deconv.cli import main
+
+    assert main(["depth", str(path), "--depths", "0", "5",
+                 "--psf-size", "13", "--no-restoration"]) == 0
+    out = capsys.readouterr().out
+    assert "FWHM axial" in out
+    assert "axial concentration" not in out

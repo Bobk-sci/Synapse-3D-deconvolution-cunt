@@ -122,8 +122,10 @@ def main() -> int:
                         help="total photon budget of one punctum")
     parser.add_argument("--offset", type=float, default=100.0, help="PMT offset in counts")
     parser.add_argument("--read-noise", type=float, default=8.0)
-    parser.add_argument("--sample-ri", type=float, default=1.47)
-    parser.add_argument("--depth", type=float, default=2.0)
+    parser.add_argument("--sample-ri", type=float, default=1.40,
+                        help="mounting medium RI; matches config/default.yaml")
+    parser.add_argument("--depth", type=float, default=8.0,
+                        help="depth below the coverslip; matches config/default.yaml")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--save-truth", action="store_true",
                         help="also write the noiseless ground truth")
@@ -133,7 +135,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     voxel = tuple(args.voxel)
     optics = OpticsConfig(sample_ri=args.sample_ri, particle_depth_um=args.depth)
-    psf_cfg = PSFConfig(cache_dir=None, xy_size=31, z_size=21)
+    psf_cfg = PSFConfig(cache_dir=None, xy_size=31, z_size=31)
     names = [name for name, _, _ in CHANNELS]
 
     for i in range(args.n_stacks):

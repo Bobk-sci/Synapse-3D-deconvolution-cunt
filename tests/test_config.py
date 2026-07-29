@@ -129,6 +129,44 @@ def test_fingerprint_tracks_intensity_scale():
     assert base.fingerprint() != scaled.fingerprint()
 
 
+def test_advisory_when_na_exceeds_the_sample_index():
+    """Oil NA 1.40 into a n=1.33 medium: the usable aperture is capped by ns."""
+    cfg = Config.from_dict({**MINIMAL, "optics": {"sample_ri": 1.33}})
+    assert any("exceeds the sample refractive index" in note for note in cfg.advisories())
+
+
+def test_advisory_when_depth_is_zero_despite_a_mismatch():
+    cfg = Config.from_dict({**MINIMAL, "optics": {"sample_ri": 1.40,
+                                                  "particle_depth_um": 0.0}})
+    assert any("near-zero depth" in note for note in cfg.advisories())
+
+
+def test_advisory_when_imaging_deep_with_a_mismatch():
+    cfg = Config.from_dict({**MINIMAL, "optics": {"sample_ri": 1.40,
+                                                  "particle_depth_um": 10.0}})
+    assert any("strongly aberrated" in note for note in cfg.advisories())
+
+
+def test_no_advisory_for_a_matched_system():
+    cfg = Config.from_dict({**MINIMAL, "optics": {"sample_ri": 1.515,
+                                                  "particle_depth_um": 2.0}})
+    assert cfg.advisories() == []
+
+
+def test_advisories_do_not_affect_the_fingerprint_path():
+    """Advisories are informational; they must not raise or block validation."""
+    cfg = Config.from_dict({**MINIMAL, "optics": {"sample_ri": 1.33,
+                                                  "particle_depth_um": 20.0}})
+    assert cfg.advisories()
+    assert cfg.fingerprint()
+
+
+def test_shipped_config_targets_an_aqueous_mount():
+    cfg = load_config("config/default.yaml")
+    assert cfg.optics.sample_ri == pytest.approx(1.40)
+    assert cfg.optics.particle_depth_um > 0
+
+
 def test_missing_file():
     with pytest.raises(ConfigError, match="not found"):
         load_config("does/not/exist.yaml")

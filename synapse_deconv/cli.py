@@ -74,7 +74,99 @@ def _log_parameters(cfg: Config) -> None:
         logger.info("channel %d: %-12s emission %.0f nm%s", i, channel.name,
                     channel.emission_nm,
                     f", excitation {channel.excitation_nm:.0f} nm" if channel.excitation_nm else "")
+    for note in cfg.advisories():
+        logger.warning("config: %s", note)
     logger.info("=" * 78)
+
+
+def cmd_depth(args: argparse.Namespace) -> int:
+    """Show how the PSF and the restoration depend on optics.particle_depth_um.
+
+    Answers the practical question "what do I put in particle_depth_um?" by
+    measuring, for the configuration's own optics, how much the PSF changes with
+    depth and how much restoration is lost when the assumed depth is wrong.
+    """
+    cfg = load_config(args.config)
+    setup_logging(cfg)
+
+    import numpy as np
+    from scipy.signal import fftconvolve
+
+    from .deconvolution import richardson_lucy
+    from .psf import compute_psf, measure_fwhm
+
+    channel = cfg.channels[min(args.channel, len(cfg.channels) - 1)]
+    voxel = (cfg.metadata.fallback_z_um, cfg.metadata.fallback_xy_um,
+             cfg.metadata.fallback_xy_um)
+    depths = args.depths or [0.0, 2.0, 5.0, 10.0, 15.0, 20.0, 30.0]
+
+    from dataclasses import replace
+
+    def psf_at(depth: float):
+        return compute_psf(
+            voxel_size_um=voxel, emission_nm=channel.emission_nm,
+            excitation_nm=channel.excitation_nm,
+            optics=replace(cfg.optics, particle_depth_um=depth),
+            psf_cfg=replace(cfg.psf, xy_size=args.psf_size, z_size=args.psf_size,
+                            cache_dir=None),
+        )
+
+    logger.info("Depth sensitivity for channel %s (em %.0f nm), ni=%.4f, ns=%.4f, NA=%.2f",
+                channel.name, channel.emission_nm, cfg.optics.immersion_ri,
+                cfg.optics.sample_ri, cfg.optics.numerical_aperture)
+    logger.info("voxel (dz, dy, dx) = %s um", voxel)
+    logger.info("")
+    logger.info("%12s %12s %12s %14s", "depth", "FWHM lateral", "FWHM axial", "relative peak")
+    reference = None
+    for depth in depths:
+        result = psf_at(depth)
+        fwhm = measure_fwhm(result.data, voxel)
+        peak = float(result.data.max())
+        reference = reference if reference is not None else peak
+        logger.info("%9.1f um %9.3f um %9.3f um %13.2f",
+                    depth, fwhm["fwhm_x_um"], fwhm["fwhm_z_um"], peak / reference)
+
+    if args.no_restoration:
+        return 0
+
+    # How much restoration is lost when the assumed depth is wrong: simulate a
+    # point source at --true-depth, then deconvolve with the PSF of each depth.
+    true_depth = args.true_depth
+    logger.info("")
+    logger.info("Restoration of a point source truly at %.1f um, deconvolved with the PSF "
+                "of each assumed depth (%d iterations):", true_depth, cfg.deconvolution.iterations)
+    logger.info("%16s %20s %14s", "assumed depth", "axial concentration", "peak")
+
+    rng = np.random.default_rng(0)
+    shape = (40, 96, 96)
+    truth = np.zeros(shape)
+    points = [(20, 48, 48), (14, 70, 30), (26, 30, 66)]
+    for z, y, x in points:
+        truth[z, y, x] = 3.0e5
+    blurred = np.maximum(fftconvolve(truth, psf_at(true_depth).data, mode="same"), 0.0)
+    observed = rng.poisson(blurred).astype(np.float32) + 100.0
+
+    def concentration(volume):
+        """Fraction of a punctum's local energy inside +/- 1 z-plane."""
+        values, peaks = [], []
+        for z, y, x in points:
+            box = volume[z - 6:z + 7, y - 8:y + 9, x - 8:x + 9]
+            total = box.sum()
+            values.append(box[5:8].sum() / total if total else float("nan"))
+            peaks.append(box.max())
+        return float(np.mean(values)), float(np.mean(peaks))
+
+    raw_conc, raw_peak = concentration(observed)
+    logger.info("%16s %19.1f%% %14.0f", "raw (none)", 100 * raw_conc, raw_peak)
+    for depth in depths:
+        deconvolved = richardson_lucy(
+            observed, psf_at(depth).data,
+            iterations=cfg.deconvolution.iterations, dtype=cfg.deconvolution.dtype,
+        ).data
+        conc, peak = concentration(deconvolved)
+        marker = "  <-- true depth" if depth == true_depth else ""
+        logger.info("%13.1f um %19.1f%% %14.0f%s", depth, 100 * conc, peak, marker)
+    return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -220,6 +312,23 @@ def build_parser() -> argparse.ArgumentParser:
     psf.add_argument("config")
     psf.add_argument("--out", help="destination directory")
     psf.set_defaults(func=cmd_psf)
+
+    depth = sub.add_parser(
+        "depth",
+        help="show how much optics.particle_depth_um matters for your optics",
+    )
+    depth.add_argument("config")
+    depth.add_argument("--channel", type=int, default=1,
+                       help="index of the channel to probe (default 1)")
+    depth.add_argument("--depths", type=float, nargs="+",
+                       help="depths in um to evaluate")
+    depth.add_argument("--true-depth", type=float, default=10.0,
+                       help="depth of the simulated point source (default 10)")
+    depth.add_argument("--psf-size", type=int, default=25,
+                       help="PSF kernel size in voxels, odd (default 25)")
+    depth.add_argument("--no-restoration", action="store_true",
+                       help="only tabulate the PSF, skip the deconvolution test")
+    depth.set_defaults(func=cmd_depth)
 
     return parser
 

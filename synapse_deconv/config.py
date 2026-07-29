@@ -333,6 +333,46 @@ class Config:
         if self.processing.max_workers < 1:
             raise ConfigError("processing.max_workers must be >= 1")
 
+    def advisories(self) -> list[str]:
+        """Non-fatal warnings about parameter combinations worth a second look.
+
+        These are physics problems, not schema problems, so they are reported
+        rather than raised: the run is still meaningful, the user just needs to
+        know what they are asking for.
+        """
+        notes: list[str] = []
+        o = self.optics
+
+        if o.numerical_aperture > o.sample_ri:
+            notes.append(
+                f"NA ({o.numerical_aperture}) exceeds the sample refractive index "
+                f"(sample_ri={o.sample_ri}): rays beyond the critical angle cannot "
+                f"enter the mounting medium, so the effective NA is capped at "
+                f"{o.sample_ri}. Expect lower resolution and strong depth-dependent "
+                "spherical aberration than the objective's specification suggests."
+            )
+        mismatch = abs(o.immersion_ri - o.sample_ri)
+        if mismatch > 0.03 and o.particle_depth_um >= 5.0:
+            notes.append(
+                f"immersion ({o.immersion_ri}) and sample ({o.sample_ri}) indices differ "
+                f"by {mismatch:.3f} at a depth of {o.particle_depth_um:g} um: the axial PSF "
+                "is strongly aberrated. Check optics.particle_depth_um against your real "
+                "imaging depth -- run 'synapse-deconv depth' to see how much it matters."
+            )
+        if mismatch > 0.03 and o.particle_depth_um < 1.0:
+            notes.append(
+                f"optics.particle_depth_um is {o.particle_depth_um:g} um while the immersion "
+                f"and sample indices differ by {mismatch:.3f}. A near-zero depth models an "
+                "almost aberration-free PSF; if you actually image several micrometres into "
+                "the tissue, the deconvolution will recover far less axial resolution."
+            )
+        if self.psf.mode == "confocal" and self.psf.pinhole_airy_units > 3.0:
+            notes.append(
+                f"pinhole of {self.psf.pinhole_airy_units} AU is effectively widefield "
+                "detection; psf.mode='emission' would be equivalent and cheaper."
+            )
+        return notes
+
     # -- reproducibility -------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:

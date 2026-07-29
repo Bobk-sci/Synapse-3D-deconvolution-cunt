@@ -58,14 +58,25 @@ optics:
   # DEUX PARAMETRES A VERIFIER -- ce sont eux qui pilotent l'aberration spherique
   # ---------------------------------------------------------------------------
   # Indice du milieu de montage :
-  #   ProLong Gold / Diamond durci ~ 1.46-1.47   (valeur par defaut ici)
-  #   Mowiol / Fluoromount        ~ 1.41-1.45
+  #   Fluoromount aqueux (Sigma)  ~ 1.40         <- valeur par defaut ici
+  #   Fluoromount-G               ~ 1.39-1.40
+  #   Mowiol                      ~ 1.41-1.45
   #   Vectashield (glycerol)      ~ 1.45
-  #   PBS / milieu aqueux         ~ 1.33         <- fort mismatch avec l'huile
-  sample_ri: 1.47
-  # Profondeur moyenne des synapses sous la lamelle. 2 um convient pour des
-  # cultures neuronales ; mettre 5-10 um pour des coupes.
-  particle_depth_um: 2.0
+  #   ProLong Gold / Diamond durci~ 1.46-1.47
+  #   PBS / milieu purement aqueux~ 1.33
+  # ATTENTION : a 1.40 avec un objectif NA 1.40, l'ouverture utile est limitee
+  # par le milieu lui-meme (angle critique). Le pipeline l'avertit au demarrage.
+  sample_ri: 1.40
+  # Profondeur des structures imagees SOUS LA LAMELLE, dans le tissu.
+  # C'est le parametre le plus sensible quand il y a un mismatch d'indice :
+  # avec huile 1.515 / Fluoromount 1.40, la FWHM axiale de la PSF TRIPLE entre
+  # 0 et 10 um de profondeur. Lancer `synapse-deconv depth config/default.yaml`
+  # pour voir l'effet sur VOTRE optique avant de choisir.
+  #   cultures / cellules isolees      : 1-3 um
+  #   ex vivo, imagerie pres du bord   : 5-10 um
+  #   ex vivo, milieu d'une coupe      : demi-epaisseur de la coupe
+  # En cas de doute, mieux vaut SURESTIMER que sous-estimer (cf. README §6.4).
+  particle_depth_um: 8.0
 
 # Un canal par marqueur, DANS L'ORDRE DES CANAUX DU FICHIER.
 # Le nombre de canaux doit correspondre exactement au fichier.

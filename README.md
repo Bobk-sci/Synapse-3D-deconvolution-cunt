@@ -19,7 +19,7 @@ Un seul fichier de configuration pilote tout le batch.
 conda env create -f environment.yml
 conda activate synapse-deconv
 pip install -e .
-pytest                      # 106 tests
+pytest                      # 114 tests
 ```
 
 Aucun runtime Java n'est nécessaire.
@@ -32,6 +32,9 @@ synapse-deconv check config/default.yaml
 
 # 2. Inspecter les PSF dans Fiji avant de lancer quoi que ce soit
 synapse-deconv psf config/default.yaml --out psf_preview
+
+# 2 bis. Choisir optics.particle_depth_um en connaissance de cause (cf. §6.4)
+synapse-deconv depth config/default.yaml
 
 # 3. Traiter UN SEUL stack et regarder le QC
 synapse-deconv run config/default.yaml --file mon_stack.oib
@@ -124,36 +127,38 @@ Cas sans aberration (`sample_ri = immersion_ri`, `particle_depth_um = 0`), à
 
 Stack synthétique 3 canaux × 30 × 256 × 256, voxel (0,30 ; 0,095 ; 0,095) µm,
 puncta convolués par la vraie PSF puis bruités (Poisson + lecture), vérité
-terrain connue. Richardson-Lucy, 25 itérations, PSF Gibson-Lanni.
+terrain connue. Conditions de `config/default.yaml` : huile 1,515 / **Fluoromount
+1,40 à 8 µm de profondeur**, Richardson-Lucy 25 itérations, PSF Gibson-Lanni.
 
 | Canal | FWHM latérale | FWHM axiale | Intensité totale |
 |---|---|---|---|
-| 421 nm | 0,159 → **0,107 µm** | 0,489 → **0,312 µm** | ×0,996 |
-| 519 nm | 0,207 → **0,117 µm** | 0,575 → **0,322 µm** | ×0,995 |
-| 617 nm | 0,244 → **0,133 µm** | 0,651 → **0,346 µm** | ×0,993 |
+| 421 nm | 0,186 → **0,110 µm** | 0,815 → **0,375 µm** | ×0,999 |
+| 519 nm | 0,237 → **0,126 µm** | 0,920 → **0,445 µm** | ×0,997 |
+| 617 nm | 0,269 → **0,141 µm** | 0,996 → **0,495 µm** | ×0,999 |
 
-Gain de résolution d'un facteur 1,8 à 1,9 dans les deux directions, et
-l'intensité totale est conservée à 0,5 % près — ce qui est la propriété qui rend
-les intensités de puncta comparables entre images.
+Gain de **×1,9 latéral et ×2,1 axial**, intensité totale conservée à 0,3 % près —
+c'est cette conservation qui rend les intensités de puncta comparables entre
+images. Le gain axial est plus élevé ici que dans un montage adapté en indice,
+simplement parce qu'il y a davantage de flou à retirer.
 
 Reproduire :
 
 ```bash
-python scripts/make_test_stack.py --out data/raw --save-truth
-mv data/raw/*_truth.ome.tif data/truth/
-synapse-deconv run config/default.yaml --file synthetic_stack_01.ome.tif --intensity-scale 0.45
+python scripts/make_test_stack.py --out data/raw --n-stacks 3 --save-truth
+mkdir -p data/truth && mv data/raw/*_truth.ome.tif data/truth/
+synapse-deconv run config/default.yaml --intensity-scale 0.31
 python scripts/validate_against_truth.py \
     --raw data/raw/synthetic_stack_01.ome.tif \
     --decon results/synthetic_stack_01_decon.ome.tif \
     --truth data/truth/synthetic_stack_01_truth.ome.tif \
-    --intensity-scale 0.45
+    --intensity-scale 0.31
 ```
 
 ![QC](docs/example_qc.png)
 
 ---
 
-## 6. Trois pièges à connaître avant de lancer le batch
+## 6. Pièges à connaître avant de lancer le batch
 
 ### 6.1 Le clipping à 65535 (le plus important)
 
@@ -193,7 +198,70 @@ Mesurez votre offset sur une zone sans marquage (ou sur une acquisition laser
 identique pour toutes les images, contrairement à `percentile` qui l'estime
 image par image et introduit une variabilité inter-image.
 
-### 6.3 L'échantillonnage à 421 nm
+### 6.3 Montage aqueux + objectif à huile : la profondeur devient critique
+
+Avec de l'huile (n = 1,515) et un montage aqueux type **Fluoromount (n ≈ 1,40)**,
+le mismatch d'indice est de 0,115 et l'aberration sphérique croît vite avec la
+profondeur. Pour λ = 519 nm, NA = 1,40 (`synapse-deconv depth`) :
+
+| Profondeur | FWHM latérale | FWHM axiale | Pic relatif |
+|---|---|---|---|
+| 0 µm | 0,200 µm | 0,483 µm | 1,00 |
+| 2 µm | 0,240 µm | 0,821 µm | 0,73 |
+| 5 µm | 0,275 µm | 1,146 µm | 0,52 |
+| 10 µm | 0,310 µm | **1,577 µm** | 0,42 |
+| 20 µm | 0,359 µm | 2,180 µm | 0,30 |
+
+**La FWHM axiale triple entre la surface et 10 µm.** Ce n'est pas un paramètre
+de second ordre : c'est celui qui détermine si la déconvolution vous rend de la
+résolution axiale ou non.
+
+À NA 1,40 dans un milieu à n = 1,40, l'ouverture utile est en outre **limitée par
+le milieu lui-même** (angle critique) : vous n'exploitez pas la pleine NA de
+l'objectif. Le pipeline vous en avertit au démarrage.
+
+### 6.4 Quelle profondeur mettre quand on ne la connaît pas
+
+`synapse-deconv depth config/default.yaml` simule une source ponctuelle à une
+profondeur vraie donnée, la déconvolue avec la PSF de chaque profondeur
+supposée, et mesure ce qui est récupéré. Pour une source vraiment à 10 µm :
+
+| Profondeur supposée | Concentration axiale | Verdict |
+|---|---|---|
+| brut, non déconvolué | 23,7 % | référence |
+| 0 µm | 26,0 % | **quasiment aucun gain axial** |
+| 2 µm | 32,2 % | fortement sous-optimal |
+| 5 µm | 43,1 % | acceptable |
+| 8 µm | 48,7 % | ✔ |
+| **10 µm (correcte)** | **49,5 %** | optimum |
+| 15 µm | 46,8 % | ✔ |
+| 20 µm | 40,3 % | dégradé mais utilisable |
+
+Trois conclusions pratiques :
+
+1. **Le plateau est large.** Entre 8 et 15 µm on récupère 95 % du gain maximal.
+   Il suffit d'être dans le bon ordre de grandeur, pas d'être exact au micron.
+2. **Sous-estimer coûte beaucoup plus cher que surestimer.** Supposer 0-2 µm
+   quand on est à 10 µm annule pratiquement le bénéfice axial ; supposer 20 µm
+   en garde encore les trois quarts. **En cas de doute, surestimez.**
+3. Comme le plateau est large et qu'un stack de 30 plans ne couvre que 9 µm,
+   **une PSF unique calculée à la profondeur médiane du stack suffit** — pas
+   besoin de déconvolution à PSF variable en profondeur.
+
+**Comment mesurer votre profondeur médiane**, à faire une fois sur une
+acquisition type : notez la position du moteur Z où la surface du tissu côté
+lamelle est nette (`z_surface`), puis celle du milieu de votre stack (`z_milieu`).
+La course du moteur n'est pas égale à la profondeur atteinte dans le tissu :
+
+```
+profondeur ≈ |z_milieu − z_surface| × ns / ni  =  |Δz| × 1,40 / 1,515  ≈  0,92 × |Δz|
+```
+
+Pour de l'ex vivo, si vous n'avez vraiment aucun repère : partez de 8 µm (valeur
+par défaut du fichier de config), et si vous imagez délibérément juste sous la
+lamelle, descendez à 5 µm.
+
+### 6.5 L'échantillonnage à 421 nm
 
 À 0,095 µm/pixel, le critère de Nyquist pour le canal 421 nm demande 0,0917 µm :
 vous êtes **très légèrement sous-échantillonné** sur ce canal. `check` le
@@ -230,8 +298,8 @@ paramètres à vérifier en priorité :
 
 | Paramètre | Défaut | À vérifier parce que |
 |---|---|---|
-| `optics.sample_ri` | 1.47 | Indice du milieu de montage. ProLong ≈ 1,46-1,47 ; Mowiol ≈ 1,41-1,45 ; PBS = 1,33. Pilote l'aberration sphérique |
-| `optics.particle_depth_um` | 2.0 | Profondeur des synapses sous la lamelle. 2 µm pour des cultures, 5-10 µm pour des coupes |
+| `optics.sample_ri` | 1.40 | Indice du milieu de montage. Fluoromount aqueux ≈ 1,40 ; Mowiol ≈ 1,41-1,45 ; ProLong ≈ 1,46-1,47 ; PBS = 1,33. Pilote l'aberration sphérique |
+| `optics.particle_depth_um` | 8.0 | Profondeur des structures sous la lamelle. **Le paramètre le plus sensible** avec un montage aqueux — voir §6.3 et §6.4 |
 | `channels[].emission_nm` | 421/519/617 | Doivent correspondre à vos fluorophores et à l'**ordre des canaux du fichier** |
 | `output.intensity_scale` | 1.0 | Voir §6.1 |
 | `background.method` | `none` | Voir §6.2 |
@@ -265,7 +333,7 @@ synapse_deconv/
 scripts/
   make_test_stack.py          génère un stack synthétique à vérité connue
   validate_against_truth.py   mesure FWHM et conservation d'intensité
-tests/                        106 tests
+tests/                        114 tests
 ```
 
 Chaque module est utilisable seul :
