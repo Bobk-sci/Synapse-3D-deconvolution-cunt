@@ -227,6 +227,16 @@ class ColocalizationConfig:
     #: A presynaptic punctum matching both post-synaptic markers is assigned to
     #: the closer one instead of being counted twice.
     resolve_ambiguous_partners: bool = True
+    #: Measure the systematic displacement between channels (chromatic
+    #: aberration, detector misalignment) before pairing. A shift comparable to
+    #: the tolerance moves every true pair outside it at once.
+    measure_channel_offset: bool = True
+    #: Subtract the measured shift before pairing. Off by default: a real offset
+    #: should be fixed with a bead calibration, not absorbed silently. Turn it on
+    #: only once you have seen the measured value and decided it is instrumental.
+    correct_channel_offset: bool = False
+    #: Warn when the measured shift exceeds this fraction of tolerance_um.
+    offset_warn_fraction: float = 0.5
     #: Randomisation control: re-pair after randomly translating one channel, to
     #: measure how many pairs the tolerance yields by chance at this density.
     #: Reported alongside the observed count; 0 disables it.
@@ -471,6 +481,8 @@ class Config:
             raise ConfigError("colocalization.contact_dilation_um must be >= 0")
         if coloc.chance_randomisations < 0:
             raise ConfigError("colocalization.chance_randomisations must be >= 0")
+        if not 0 < coloc.offset_warn_fraction <= 2:
+            raise ConfigError("colocalization.offset_warn_fraction must be in (0, 2]")
         roles = {
             "presynaptic": coloc.presynaptic,
             "postsynaptic_excitatory": coloc.postsynaptic_excitatory,

@@ -24,6 +24,7 @@ import numpy as np
 from .colocalization import (
     PairingResult,
     chance_pairing_rate,
+    estimate_channel_offset,
     pair_by_contact,
     pair_puncta,
     resolve_exclusive_partners,
@@ -169,8 +170,10 @@ def _inside(centroids_um: np.ndarray, roi: np.ndarray,
     return roi[idx[:, 0], idx[:, 1], idx[:, 2]]
 
 
-def _pair(cfg: Config, pre: DetectionResult, post: DetectionResult,
-          voxel: tuple[float, float, float]) -> PairingResult:
+def _pair_arrays(cfg: Config, pre: DetectionResult, post: DetectionResult,
+                 post_centroids_um: np.ndarray,
+                 voxel: tuple[float, float, float]) -> PairingResult:
+    """Pair, using possibly offset-corrected postsynaptic centroids."""
     coloc = cfg.colocalization
     if coloc.criterion == "contact":
         return pair_by_contact(
@@ -178,7 +181,7 @@ def _pair(cfg: Config, pre: DetectionResult, post: DetectionResult,
             dilation_um=coloc.contact_dilation_um, one_to_one=coloc.one_to_one,
         )
     return pair_puncta(
-        pre.centroids_um, post.centroids_um,
+        pre.centroids_um, post_centroids_um,
         tolerance_um=coloc.tolerance_um, one_to_one=coloc.one_to_one,
     )
 
@@ -284,8 +287,49 @@ def count_stack(cfg: Config, source: Path) -> CountResult:
     exc_name = coloc.postsynaptic_excitatory
     inh_name = coloc.postsynaptic_inhibitory
 
-    excitatory = _pair(cfg, detections[pre_name], detections[exc_name], voxel)
-    inhibitory = _pair(cfg, detections[pre_name], detections[inh_name], voxel)
+    offsets: dict[str, dict[str, float]] = {}
+    if coloc.measure_channel_offset:
+        for key, post_name in (("excitatory", exc_name), ("inhibitory", inh_name)):
+            offsets[key] = estimate_channel_offset(
+                detections[pre_name].centroids_um, detections[post_name].centroids_um,
+                search_radius_um=max(1.0, 3 * coloc.tolerance_um),
+            )
+            o = offsets[key]
+            if o["n_pairs"]:
+                logger.info(
+                    "  channel offset %s vs %s: (z %+.3f, y %+.3f, x %+.3f) um, "
+                    "|shift| %.3f um from %d mutual neighbours "
+                    "(scatter %.3f um, ratio %.2f -- below 1 means a real shift)",
+                    pre_name, post_name, o["shift_z_um"], o["shift_y_um"],
+                    o["shift_x_um"], o["shift_norm_um"], o["n_pairs"], o["scatter_um"],
+                    o["scatter_ratio"],
+                )
+                if (o["shift_norm_um"] > coloc.offset_warn_fraction * coloc.tolerance_um
+                        and o["scatter_ratio"] < 1.0):
+                    result.warnings.append(
+                        f"{pre_name} and {post_name} are systematically offset by "
+                        f"{o['shift_norm_um']:.3f} um, which is "
+                        f"{o['shift_norm_um'] / coloc.tolerance_um:.0%} of the "
+                        f"{coloc.tolerance_um} um tolerance. Chromatic aberration or "
+                        "detector misalignment of this size pushes true pairs outside "
+                        "the criterion and collapses the pairing rate. Calibrate with "
+                        "beads, or set colocalization.correct_channel_offset once you "
+                        "have confirmed the shift is instrumental."
+                    )
+
+    def shifted(name: str, key: str) -> np.ndarray:
+        centroids = detections[name].centroids_um
+        o_check = offsets.get(key, {})
+        if not (coloc.correct_channel_offset and o_check.get("n_pairs")
+                and o_check.get("scatter_ratio", float("inf")) < 1.0):
+            return centroids
+        o = offsets[key]
+        return centroids - np.array([o["shift_z_um"], o["shift_y_um"], o["shift_x_um"]])
+
+    excitatory = _pair_arrays(cfg, detections[pre_name], detections[exc_name],
+                              shifted(exc_name, "excitatory"), voxel)
+    inhibitory = _pair_arrays(cfg, detections[pre_name], detections[inh_name],
+                              shifted(inh_name, "inhibitory"), voxel)
 
     n_ambiguous = 0
     if coloc.resolve_ambiguous_partners:
@@ -322,6 +366,7 @@ def count_stack(cfg: Config, source: Path) -> CountResult:
 
     result.synapses = {
         "chance": chance,
+        "channel_offsets": offsets,
         "presynaptic_channel": pre_name,
         "excitatory_channel": exc_name,
         "inhibitory_channel": inh_name,

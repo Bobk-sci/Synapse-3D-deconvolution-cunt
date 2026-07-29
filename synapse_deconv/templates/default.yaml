@@ -201,6 +201,16 @@ colocalization:
   # Un punctum presynaptique proche a la fois de PSD-95 et de Gephyrin est
   # attribue au plus proche au lieu d'etre compte deux fois.
   resolve_ambiguous_partners: true
+  # Decalage systematique entre canaux (aberration chromatique, alignement des
+  # detecteurs). Entre 421 et 618 nm il atteint couramment 0.2-0.5 um, soit PLUS
+  # que la tolerance : toutes les vraies paires sortent du critere d'un coup et
+  # le taux d'appariement s'effondre alors que chaque canal parait parfait.
+  measure_channel_offset: true
+  # Soustraire le decalage mesure avant l'appariement. Desactive par defaut : un
+  # decalage reel se corrige avec une calibration sur billes, pas en l'absorbant
+  # en silence. N'activez qu'apres avoir vu la valeur mesuree.
+  correct_channel_offset: false
+  offset_warn_fraction: 0.5
   # Controle de hasard : re-apparie apres translation aleatoire d'un canal,
   # pour mesurer combien de paires la tolerance donne par pure coincidence a
   # cette densite. A REGARDER : si le hasard depasse 25 % de l'observe, le

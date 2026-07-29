@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "PairingResult",
     "chance_pairing_rate",
+    "estimate_channel_offset",
     "pair_by_contact",
     "pair_puncta",
     "resolve_exclusive_partners",
@@ -225,6 +226,65 @@ def pair_by_contact(
                      "n_pre": len(pre), "n_post": len(post),
                      "median_distance_um": float(np.median(distances))},
     )
+
+
+def estimate_channel_offset(
+    reference_um: np.ndarray,
+    moving_um: np.ndarray,
+    *,
+    search_radius_um: float = 1.0,
+    min_pairs: int = 20,
+) -> dict[str, float]:
+    """Systematic displacement between two channels, from mutual nearest neighbours.
+
+    Chromatic aberration and detector misalignment shift one channel against
+    another by an amount that is small in absolute terms but large compared with
+    a 0.3 um apposition tolerance -- between 421 and 618 nm emission on a high-NA
+    lens it routinely reaches a few hundred nanometres, and it is worse along z.
+    A shift of that size moves every true pair outside the tolerance at once, so
+    the pairing collapses while each channel individually looks perfect.
+
+    The estimate is the componentwise median of the displacement between mutual
+    nearest neighbours. Real pairs contribute a consistent vector; unrelated
+    puncta contribute isotropic noise that the median rejects.
+    """
+    from scipy.spatial import cKDTree
+
+    reference = np.asarray(reference_um, dtype=float).reshape(-1, 3)
+    moving = np.asarray(moving_um, dtype=float).reshape(-1, 3)
+    empty = {"n_pairs": 0, "shift_z_um": 0.0, "shift_y_um": 0.0, "shift_x_um": 0.0,
+             "shift_norm_um": 0.0, "scatter_um": 0.0, "scatter_ratio": float("inf")}
+    if len(reference) < min_pairs or len(moving) < min_pairs:
+        return empty
+
+    forward = cKDTree(moving).query(reference, distance_upper_bound=search_radius_um)
+    backward = cKDTree(reference).query(moving, distance_upper_bound=search_radius_um)
+    displacements = [
+        moving[j] - reference[i]
+        for i, (distance, j) in enumerate(zip(*forward))
+        if np.isfinite(distance) and j < len(moving) and backward[1][j] == i
+    ]
+    if len(displacements) < min_pairs:
+        return empty
+
+    deltas = np.asarray(displacements)
+    shift = np.median(deltas, axis=0)
+    # Median absolute deviation of the residual: small means a genuine
+    # systematic shift, large means the median is averaging noise.
+    scatter = float(np.median(np.linalg.norm(deltas - shift, axis=1)))
+    norm = float(np.linalg.norm(shift))
+    return {
+        "n_pairs": len(deltas),
+        "shift_z_um": float(shift[0]),
+        "shift_y_um": float(shift[1]),
+        "shift_x_um": float(shift[2]),
+        "shift_norm_um": norm,
+        "scatter_um": scatter,
+        # Below ~1 the displacement is consistent across pairs, so the shift is
+        # real. Well above 1 the median is averaging unrelated puncta and the
+        # "shift" is finite-sample noise, not an instrumental offset.
+        "scatter_ratio": scatter / norm if norm > 0 else float("inf"),
+    }
 
 
 def chance_pairing_rate(
