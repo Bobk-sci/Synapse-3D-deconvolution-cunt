@@ -19,7 +19,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ChannelStats", "compute_stats", "write_qc_figure"]
+__all__ = ["ChannelStats", "compute_stats", "estimate_background", "write_qc_figure"]
 
 _UINT16_MAX = 65535
 
@@ -76,6 +76,29 @@ def compute_stats(volume: np.ndarray, saturation_level: int = _UINT16_MAX) -> Ch
         total_intensity=float(as_float.sum()),
         sharpness=sharpness,
     )
+
+
+def estimate_background(volume: np.ndarray) -> float:
+    """Modal intensity of a 16-bit volume: the detector offset plus stray light.
+
+    In a punctate image the overwhelming majority of voxels are background, so
+    the histogram peak sits on the offset. A low percentile would land on the
+    lower tail of the read noise instead and underestimate it, which is the
+    wrong direction: subtracting too little leaves a pedestal for Richardson-Lucy
+    to sharpen into artefacts.
+    """
+    data = np.asarray(volume)
+    if data.size == 0:
+        return 0.0
+    if data.dtype == np.uint16:
+        counts = np.bincount(data.ravel(), minlength=1)
+        return float(np.argmax(counts))
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        return 0.0
+    counts, edges = np.histogram(finite, bins=512)
+    peak = int(np.argmax(counts))
+    return float((edges[peak] + edges[peak + 1]) / 2)
 
 
 def _projections(volume: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

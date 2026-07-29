@@ -19,31 +19,148 @@ Un seul fichier de configuration pilote tout le batch.
 conda env create -f environment.yml
 conda activate synapse-deconv
 pip install -e .
-pytest                      # 114 tests
+pytest                      # 119 tests
 ```
 
 Aucun runtime Java n'est nécessaire.
 
-## 2. Prise en main
+## 2. Tester sur vos propres images
+
+Cinq étapes, dans l'ordre. **Ne sautez pas l'étape 2** : c'est elle qui attrape
+les erreurs qui invalideraient toute l'étude.
+
+### Étape 0 — mettre quelques images de côté
 
 ```bash
-# 1. Vérifier la config et lister ce qui sera traité (ne calcule rien)
+mkdir -p data/raw
+cp /chemin/vers/vos/*.oib data/raw/
+```
+
+Prenez 2-3 stacks **représentatifs**, dont le plus brillant que vous ayez (il
+servira à régler le gain de sortie à l'étape 4). Pour un `.oif`, copiez le
+fichier `.oif` **et** son dossier `.oif.files` qui l'accompagne.
+
+Puis pointez la config dessus, en éditant `config/default.yaml` :
+
+```yaml
+input:
+  directory: data/raw
+```
+
+### Étape 1 — la config est-elle cohérente ?
+
+```bash
 synapse-deconv check config/default.yaml
+```
 
-# 2. Inspecter les PSF dans Fiji avant de lancer quoi que ce soit
+Valide la syntaxe, liste les fichiers trouvés, et signale les combinaisons
+optiques douteuses. Ne lit pas encore les images.
+
+### Étape 2 — le pipeline lit-il correctement VOS fichiers ? ⚠️
+
+```bash
+synapse-deconv inspect config/default.yaml
+```
+
+Rien n'est calculé ni écrit : la commande affiche ce qu'elle a réellement lu.
+Vérifiez **quatre** choses :
+
+```
+exvivo_g1_01.oif: 3 channel(s), 30x128x128 (ZYX), uint16,
+                  voxel dz=0.3000 dy=0.0950 dx=0.0950 um (anisotropy z/xy = 3.16, source: metadata)
+  idx config name    emission (file/config) excitation (file/config)
+  0   Alexa405       617 / 421              594 / 405       <-- CHECK THE CHANNEL ORDER
+  1   Alexa488       519 / 519              488 / 488
+  2   Alexa594       421 / 617              405 / 594        <-- CHECK THE CHANNEL ORDER
+  channel            min       max      mean   bg est.    saturated
+  Alexa405            61      3563     127.6       109           0
+```
+
+1. **La taille de voxel** : `dz` doit valoir votre pas Z et `dy`/`dx` votre pixel
+   XY, avec `source: metadata`. Si vous lisez `source: fallback`, les métadonnées
+   n'ont pas été trouvées et les valeurs viennent de la config — vérifiez-les.
+2. **L'ordre des canaux** : le FV1000 en acquisition séquentielle ne stocke pas
+   forcément les canaux dans l'ordre où vous les avez configurés. Si
+   `CHECK THE CHANNEL ORDER` apparaît, **réordonnez la liste `channels`** du
+   fichier de config pour qu'elle suive l'ordre du fichier. Sans ça, chaque canal
+   serait déconvolué avec la PSF d'une autre longueur d'onde.
+3. **`saturated`** : doit être 0. Sinon vos PMT saturaient à l'acquisition, ce qui
+   viole l'hypothèse de Poisson — la déconvolution redistribuera de l'intensité
+   autour de ces voxels et les mesures y seront fausses.
+4. **`bg est.`** : c'est l'offset détecteur estimé (valeur modale). Notez-le,
+   il sert à l'étape 4.
+
+### Étape 3 — regarder les PSF
+
+```bash
 synapse-deconv psf config/default.yaml --out psf_preview
+```
 
-# 2 bis. Choisir optics.particle_depth_um en connaissance de cause (cf. §6.4)
-synapse-deconv depth config/default.yaml
+Ouvrez les OME-TIFF dans Fiji (`Image > Stacks > Reslice` pour la vue XZ). Une
+PSF correcte a un cœur net, une légère asymétrie axiale, et pas de structure en
+anneaux dominante. Le log donne les FWHM.
 
-# 3. Traiter UN SEUL stack et regarder le QC
+### Étape 4 — déconvoluer UN stack et lire le QC
+
+```bash
 synapse-deconv run config/default.yaml --file mon_stack.oib
+```
 
-# 4. Une fois les paramètres validés, lancer le dossier entier
+Ouvrez `results/qc/mon_stack_decon_qc.png`. Ce que vous devez voir :
+
+- **vue XZ** : les puncta passent de traits verticaux allongés à des points
+  compacts. C'est le principal indicateur ;
+- **vue XY** : les puncta se resserrent, le voile diffus entre eux diminue ;
+- **`gradient energy ×N`** : doit valoir plusieurs dizaines. Si c'est proche de
+  1, la déconvolution n'a rien fait — revoyez `particle_depth_um` (§6.4) ;
+- pas de **damier**, de **grain amplifié** ni de **liserés** sur les bords : ce
+  sont les signes d'un excès d'itérations ou d'un fond non soustrait.
+
+Dans le log, deux avertissements à traiter :
+
+```
+WARNING ... exceeded 65535 and were clipped ... Set output.intensity_scale to <= 0.311
+```
+→ reportez la **plus petite** valeur suggérée sur vos 2-3 stacks dans
+`output.intensity_scale` (§6.1).
+
+Et mettez le `bg est.` relevé à l'étape 2 dans la config (§6.2) :
+
+```yaml
+background:
+  method: constant
+  constant_value: 109      # <- votre offset
+```
+
+Relancez le même stack avec `--overwrite` jusqu'à ce que le QC vous convienne.
+
+### Étape 5 — lancer tout le dossier
+
+```bash
 synapse-deconv run config/default.yaml
 ```
 
-Sans installation : `python -m synapse_deconv run config/default.yaml`.
+Ne changez plus **aucun** paramètre entre les groupes de votre étude. Vérifiez
+en fin de course que `run_manifest.json` affiche la même `config_fingerprint`
+pour tous les fichiers.
+
+### Si ça coince
+
+| Symptôme | Cause probable |
+|---|---|
+| `could not open Olympus file` | Dossier `.oif.files` absent ou incomplet ; `.oib` tronqué à la copie |
+| `CHANNEL COUNT MISMATCH` | La liste `channels` de la config n'a pas le bon nombre d'entrées |
+| `source: fallback` | Métadonnées absentes : vérifiez `fallback_xy_um` / `fallback_z_um` |
+| `differs from the expected` | La calibration lue s'écarte fortement de l'attendu — erreur d'unité probable |
+| `MemoryError` | Stack trop gros : réduisez `psf.xy_size`/`z_size`, ou traitez par lots |
+| Sortie quasi identique au brut | `particle_depth_um` très sous-estimé (§6.4) |
+
+### Aucune image sous la main ?
+
+Le pipeline sait générer un jeu synthétique à vérité connue pour se faire la
+main sans données réelles — voir §5.
+
+Sans installation, remplacez `synapse-deconv` par `python -m synapse_deconv`.
 
 Sorties dans `results/` :
 
@@ -329,11 +446,11 @@ synapse_deconv/
   writers.py         OME-TIFF 16 bits calibré, politiques de conversion
   qc.py              statistiques d'intensité et figures MIP avant/après
   pipeline.py        traitement d'un stack, batch, manifeste
-  cli.py             sous-commandes run / check / psf
+  cli.py             sous-commandes run / check / inspect / psf / depth
 scripts/
   make_test_stack.py          génère un stack synthétique à vérité connue
   validate_against_truth.py   mesure FWHM et conservation d'intensité
-tests/                        114 tests
+tests/                        119 tests
 ```
 
 Chaque module est utilisable seul :

@@ -120,3 +120,52 @@ def test_missing_storage_directory_is_a_read_error(tmp_path):
 
     with pytest.raises(ReadError, match="could not open Olympus file"):
         read_stack(path)
+
+
+def test_inspect_flags_a_reversed_channel_order(tmp_path, capsys):
+    """The classic FV1000 trap: sequential acquisition stored in the other order."""
+    import yaml
+
+    from synapse_deconv.cli import main
+
+    write_oif(tmp_path / "raw", stem="scan", shape=(3, 8, 32, 32),
+              emission_nm=(617.0, 519.0, 421.0), excitation_nm=(594.0, 488.0, 405.0),
+              channel_names=("CH1", "CH2", "CH3"))
+    cfg = {
+        "input": {"directory": str(tmp_path / "raw")},
+        "output": {"directory": str(tmp_path / "out")},
+        "channels": [
+            {"name": "Alexa405", "emission_nm": 421, "excitation_nm": 405},
+            {"name": "Alexa488", "emission_nm": 519, "excitation_nm": 488},
+            {"name": "Alexa594", "emission_nm": 617, "excitation_nm": 594},
+        ],
+        "logging": {"file": ""},
+    }
+    path = tmp_path / "cfg.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+
+    assert main(["inspect", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("CHECK THE CHANNEL ORDER") == 2
+    assert "pinhole in file" in out
+
+
+def test_inspect_reports_a_channel_count_mismatch(tmp_path, capsys):
+    import yaml
+
+    from synapse_deconv.cli import main
+
+    write_oif(tmp_path / "raw", stem="scan", shape=(2, 8, 32, 32))
+    cfg = {
+        "input": {"directory": str(tmp_path / "raw")},
+        "output": {"directory": str(tmp_path / "out")},
+        "channels": [{"name": "a", "emission_nm": 421},
+                     {"name": "b", "emission_nm": 519},
+                     {"name": "c", "emission_nm": 617}],
+        "logging": {"file": ""},
+    }
+    path = tmp_path / "cfg.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+
+    assert main(["inspect", str(path)]) == 1
+    assert "CHANNEL COUNT MISMATCH" in capsys.readouterr().out

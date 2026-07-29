@@ -79,6 +79,137 @@ def _log_parameters(cfg: Config) -> None:
     logger.info("=" * 78)
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Report what the pipeline reads from real files, without deconvolving.
+
+    This is the first thing to run on a new dataset: it shows the voxel size
+    actually parsed from the metadata, the channel order and wavelengths the
+    file declares against the ones the config assumes, the sampling against the
+    Nyquist limit, and a background estimate for background.constant_value.
+    """
+    cfg = load_config(args.config)
+    setup_logging(cfg)
+
+
+    from .pipeline import discover_inputs
+    from .psf import theoretical_resolution
+    from .qc import compute_stats, estimate_background
+    from .readers import ReadError, read_stack
+
+    if args.file:
+        source = Path(args.file)
+        if not source.is_absolute() and not source.exists():
+            source = Path(cfg.input.directory) / args.file
+        if not source.exists():
+            logger.error("file not found: %s", source)
+            return 2
+        paths = [source]
+    else:
+        try:
+            paths = discover_inputs(cfg)
+        except FileNotFoundError as exc:
+            logger.error("%s", exc)
+            return 2
+        if args.limit:
+            paths = paths[: args.limit]
+
+    if not paths:
+        logger.error("no input file matched %s in %s",
+                     cfg.input.patterns, cfg.input.directory)
+        return 2
+
+    logger.info("Inspecting %d file(s). Nothing is written and nothing is deconvolved.",
+                len(paths))
+    failures = 0
+
+    for path in paths:
+        logger.info("")
+        logger.info("=" * 78)
+        try:
+            stack = read_stack(
+                path,
+                voxel_size_source=cfg.metadata.voxel_size_source,
+                fallback_xy_um=cfg.metadata.fallback_xy_um,
+                fallback_z_um=cfg.metadata.fallback_z_um,
+                spacing_divisor=cfg.metadata.spacing_divisor,
+                tolerance_warn_ratio=cfg.metadata.tolerance_warn_ratio,
+            )
+        except ReadError as exc:
+            logger.error("%s: UNREADABLE -- %s", path.name, exc)
+            failures += 1
+            continue
+
+        logger.info("%s", stack.describe())
+        dz, dy, dx = stack.voxel_size_um
+
+        if len(cfg.channels) != stack.n_channels:
+            logger.error(
+                "  CHANNEL COUNT MISMATCH: the file has %d channel(s) but the config "
+                "declares %d. Fix the 'channels' section before running.",
+                stack.n_channels, len(cfg.channels),
+            )
+            failures += 1
+
+        logger.info("  %-3s %-14s %-22s %-22s", "idx", "config name",
+                    "emission (file/config)", "excitation (file/config)")
+        for index in range(stack.n_channels):
+            found = stack.channels[index] if index < len(stack.channels) else None
+            configured = cfg.channels[index] if index < len(cfg.channels) else None
+            file_em = f"{found.emission_nm:.0f}" if found and found.emission_nm else "-"
+            file_ex = f"{found.excitation_nm:.0f}" if found and found.excitation_nm else "-"
+            cfg_em = f"{configured.emission_nm:.0f}" if configured else "-"
+            cfg_ex = (f"{configured.excitation_nm:.0f}"
+                      if configured and configured.excitation_nm else "-")
+            flag = ""
+            if (found and found.emission_nm and configured
+                    and abs(found.emission_nm - configured.emission_nm) > 15):
+                flag = "   <-- CHECK THE CHANNEL ORDER"
+            logger.info("  %-3d %-14s %-22s %-22s%s", index,
+                        configured.name if configured else "(none)",
+                        f"{file_em} / {cfg_em}", f"{file_ex} / {cfg_ex}", flag)
+            if found and found.pinhole_um:
+                logger.info("      pinhole in file: %.1f um (back-projected)",
+                            found.pinhole_um)
+
+        for configured in cfg.channels[: stack.n_channels]:
+            lateral, axial = theoretical_resolution(
+                configured.emission_nm, cfg.optics.numerical_aperture, cfg.optics.immersion_ri
+            )
+            logger.info(
+                "  %-12s Nyquist XY %.4f um (file %.4f%s) | Nyquist Z %.3f um (file %.3f%s)",
+                configured.name, lateral / 2, dx,
+                " OK" if dx <= lateral / 2 else " UNDERSAMPLED",
+                axial / 2, dz, " OK" if dz <= axial / 2 else " UNDERSAMPLED",
+            )
+
+        logger.info("  %-12s %9s %9s %9s %9s %12s", "channel", "min", "max", "mean",
+                    "bg est.", "saturated")
+        for index in range(stack.n_channels):
+            stats = compute_stats(stack.data[index])
+            # Modal intensity: a usable starting point for
+            # background.constant_value (the detector offset).
+            background = estimate_background(stack.data[index])
+            name = cfg.channels[index].name if index < len(cfg.channels) else f"ch{index}"
+            note = ""
+            if stats.saturated_fraction > 0.001:
+                note = "  <-- SATURATED"
+            logger.info("  %-12s %9.0f %9.0f %9.1f %9.0f %11d%s", name,
+                        stats.min, stats.max, stats.mean, background,
+                        stats.saturated_voxels, note)
+
+        for warning in stack.warnings:
+            logger.warning("  %s", warning)
+
+    logger.info("")
+    logger.info("=" * 78)
+    if failures:
+        logger.error("%d file(s) need attention before the batch can run", failures)
+        return 1
+    logger.info("All %d file(s) read cleanly.", len(paths))
+    logger.info("Next: 'run --file <one stack>' and look at the QC PNG.")
+    return 0
+
+
 def cmd_depth(args: argparse.Namespace) -> int:
     """Show how the PSF and the restoration depend on optics.particle_depth_um.
 
@@ -312,6 +443,16 @@ def build_parser() -> argparse.ArgumentParser:
     psf.add_argument("config")
     psf.add_argument("--out", help="destination directory")
     psf.set_defaults(func=cmd_psf)
+
+    inspect = sub.add_parser(
+        "inspect",
+        help="report what is read from real files (voxel size, channels, sampling, "
+             "background) without deconvolving anything",
+    )
+    inspect.add_argument("config")
+    inspect.add_argument("--file", help="inspect only this stack")
+    inspect.add_argument("--limit", type=int, help="inspect at most N files")
+    inspect.set_defaults(func=cmd_inspect)
 
     depth = sub.add_parser(
         "depth",

@@ -207,3 +207,39 @@ def test_writer_requires_four_dimensions(tmp_path):
     with pytest.raises(ValueError, match=r"\(C, Z, Y, X\)"):
         write_ome_tiff(tmp_path / "x.ome.tif",
                        np.zeros((4, 8, 8), dtype=np.uint16), voxel_size_um=VOXEL)
+
+
+# -- background estimation -------------------------------------------------
+
+def test_modal_background_finds_the_detector_offset():
+    """The offset must be recovered from a punctate volume, not the noise tail."""
+    from synapse_deconv.qc import estimate_background
+
+    rng = np.random.default_rng(4)
+    volume = rng.normal(100.0, 8.0, size=(20, 64, 64))
+    volume[5, 30, 30] = 5000        # a few bright puncta must not shift it
+    volume[8, 40, 20] = 4000
+    volume = np.clip(volume, 0, 65535).astype(np.uint16)
+    assert estimate_background(volume) == pytest.approx(100, abs=3)
+
+
+def test_modal_background_beats_a_low_percentile():
+    """A low percentile sits on the lower noise tail and under-estimates."""
+    from synapse_deconv.qc import estimate_background
+
+    rng = np.random.default_rng(5)
+    volume = np.clip(rng.normal(200.0, 15.0, size=(10, 64, 64)), 0, 65535).astype(np.uint16)
+    modal = estimate_background(volume)
+    percentile = float(np.percentile(volume, 1.0))
+    assert abs(modal - 200) < abs(percentile - 200)
+
+
+def test_modal_background_handles_float_and_empty():
+    from synapse_deconv.qc import estimate_background
+
+    # Float volumes go through a 512-bin histogram, so the answer is only
+    # accurate to one bin width.
+    assert estimate_background(np.full((4, 8, 8), 3.5, dtype=np.float32)) == pytest.approx(
+        3.5, abs=0.01
+    )
+    assert estimate_background(np.array([], dtype=np.uint16)) == 0.0
