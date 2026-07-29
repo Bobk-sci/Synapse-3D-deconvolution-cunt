@@ -212,22 +212,32 @@ def cmd_inspect(args: argparse.Namespace) -> int:
                 axial / 2, dz, " OK" if dz <= axial / 2 else " UNDERSAMPLED",
             )
 
-        logger.info("  %-12s %9s %9s %9s %9s %12s", "channel", "min", "max", "mean",
-                    "bg est.", "saturated")
+        logger.info("  %-12s %8s %8s %8s %10s %8s %10s", "channel", "min", "max", "mean",
+                    "offset", "mode", "saturated")
         for index in range(stack.n_channels):
-            stats = compute_stats(stack.data[index])
-            # Modal intensity: a usable starting point for
-            # background.constant_value (the detector offset).
-            background = estimate_background(stack.data[index])
+            channel_data = stack.data[index]
+            stats = compute_stats(channel_data)
+            # Two candidates for background.constant_value, see below.
+            offset = float(np.percentile(channel_data, 0.1))
+            mode = estimate_background(channel_data)
             name = cfg.channels[index].name if index < len(cfg.channels) else f"ch{index}"
-            full_scale = detect_saturation_level(stack.data[index])
+            full_scale = detect_saturation_level(channel_data)
             note = ""
             if full_scale is not None and stats.saturated_fraction > 0.0001:
                 bits = int(round(np.log2(full_scale + 1)))
                 note = f"  <-- SATURATED at {full_scale} ({bits}-bit full scale)"
-            logger.info("  %-12s %9.0f %9.0f %9.1f %9.0f %11d%s", name,
-                        stats.min, stats.max, stats.mean, background,
+            logger.info("  %-12s %8.0f %8.0f %8.1f %10.0f %8.0f %9d%s", name,
+                        stats.min, stats.max, stats.mean, offset, mode,
                         stats.saturated_voxels, note)
+        logger.info(
+            "  'offset' (0.1st percentile) = detector pedestal. 'mode' also includes the "
+            "diffuse tissue background."
+        )
+        logger.info(
+            "  For background.constant_value: use 'offset' when punctum INTENSITIES are "
+            "measured (it preserves photometric linearity); 'mode' only when you just "
+            "COUNT puncta -- it detects better but biases dim puncta."
+        )
 
         for warning in stack.warnings:
             logger.warning("  %s", warning)

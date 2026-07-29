@@ -186,8 +186,10 @@ exvivo_g1_01.oif: 3 channel(s), 30x128x128 (ZYX), uint16,
 3. **`saturated`** : doit être 0. Sinon vos PMT saturaient à l'acquisition, ce qui
    viole l'hypothèse de Poisson — la déconvolution redistribuera de l'intensité
    autour de ces voxels et les mesures y seront fausses.
-4. **`bg est.`** : c'est l'offset détecteur estimé (valeur modale). Notez-le,
-   il sert à l'étape 4.
+4. **`offset` et `mode`** : deux candidats pour `background.constant_value`.
+   `offset` (percentile 0,1) est le piédestal électronique ; `mode` y ajoute le
+   fond tissulaire diffus. **Prenez `offset`** si vous mesurez des intensités de
+   puncta — voir §6.6, le choix n'est pas neutre.
 
 ### Étape 3 — regarder les PSF
 
@@ -527,12 +529,43 @@ Trois enseignements, contre-intuitifs pour deux d'entre eux :
    redescend après 40 itérations ; avec `tv_lambda: 0.01` il reste stable de 40 à
    60, ce qui rend le réglage moins critique d'une image à l'autre.
 
+#### Combien soustraire, exactement ?
+
+`inspect` donne deux candidats. Le choix dépend de ce que vous mesurez, et
+l'écart n'est pas anodin. Mesuré sur les mêmes stacks simulés (40 itérations,
+TV 0.01), avec deux métriques insensibles à une soustraction constante :
+**d′** = détectabilité des puncta, **r** = linéarité entre l'intensité
+reconstruite et l'intensité vraie.
+
+| Canal | Soustrait | d′ (détection) | r (linéarité) |
+|---|---|---|---|
+| peu dense | rien | 965 | 0,911 |
+| peu dense | **offset (180)** | **1668** | **0,901** |
+| peu dense | mode (276) | 5606 | 0,871 |
+| dense | rien | 94 | 0,894 |
+| dense | **offset (180)** | **113** | **0,895** |
+| dense | mode (899) | 1792 | 0,858 |
+
+Soustraire le **mode** maximise la détection — de très loin — mais **dégrade la
+linéarité photométrique** : les puncta faibles perdent une part fixe de leur
+signal, donc leur intensité reconstruite n'est plus proportionnelle à la vraie.
+Sur le canal dense, r tombe de 0,895 à 0,858.
+
+- **Vous comptez des puncta / mesurez une densité** → le mode est légitime, et
+  nettement meilleur.
+- **Vous comparez des intensités de puncta entre groupes** → prenez l'**offset**
+  (percentile 0,1). Il améliore quand même la détectabilité de ~20 % sans coûter
+  de linéarité.
+
+En cas de doute pour une étude comparative multi-groupes, l'offset est le choix
+sûr : c'est le seul qui retire du signal qui n'est pas de la fluorescence.
+
 Réglage recommandé pour ce type de données :
 
 ```yaml
 background:
   method: constant
-  constant_value: 180        # votre 'bg est.' de l'étape 2
+  constant_value: 180        # colonne 'offset' de l'étape 2, PAS 'mode'
 deconvolution:
   iterations: 40
   regularization: tv
