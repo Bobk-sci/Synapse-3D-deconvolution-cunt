@@ -175,3 +175,47 @@ def test_detection_is_deterministic():
     a = detect_puncta(volume, VOXEL, punctum_diameters_um=[0.35], threshold_sigma=5.0)
     b = detect_puncta(volume, VOXEL, punctum_diameters_um=[0.35], threshold_sigma=5.0)
     np.testing.assert_array_equal(a.centroids_um, b.centroids_um)
+
+
+def test_a_packed_field_is_reported_not_silently_emptied(caplog):
+    """The self-calibration assumes most local maxima are noise. Say so when it breaks."""
+    import logging
+
+    rng = np.random.default_rng(4)
+    dz, dy, dx = VOXEL
+    shape_um = (6.0, 12.0, 12.0)
+    shape = (int(shape_um[0] / dz), int(shape_um[1] / dy), int(shape_um[2] / dx))
+    zz = np.arange(shape[0])[:, None, None] * dz
+    yy = np.arange(shape[1])[None, :, None] * dy
+    xx = np.arange(shape[2])[None, None, :] * dx
+    volume = np.zeros(shape)
+    for _ in range(int(1.0 * np.prod(shape_um))):        # 1 punctum per um3
+        c = (rng.uniform(1.5, shape_um[0] - 1.5), rng.uniform(1.5, shape_um[1] - 1.5),
+             rng.uniform(1.5, shape_um[2] - 1.5))
+        volume += 2500 * np.exp(
+            -((zz - c[0]) ** 2 + (yy - c[1]) ** 2 + (xx - c[2]) ** 2) / (2 * 0.10 ** 2)
+        )
+    data = np.clip(rng.poisson(volume) + 192, 0, 4095).astype(np.uint16)
+
+    with caplog.at_level(logging.WARNING, logger="synapse_deconv.detection"):
+        result = detect_puncta(data, VOXEL, punctum_diameters_um=[0.35],
+                               threshold_sigma=5.0)
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    # Either it detects and warns that the field is near the packing limit, or it
+    # detects nothing and says the calibration broke -- never a silent zero.
+    if result.count == 0:
+        assert "clearly carries signal" in messages or "broken down" in messages
+    else:
+        assert "packing limit" in messages
+        assert result.diagnostics["maxima_occupancy"] > 0.3
+
+
+def test_resolution_ceiling_is_reported():
+    """How many puncta the sampling could resolve at all, given min_separation."""
+    volume = make_volume(grid_points(3))
+    result = detect_puncta(volume, VOXEL, punctum_diameters_um=[0.35], threshold_sigma=5.0)
+    ceiling = result.diagnostics["max_resolvable_puncta"]
+    assert ceiling > result.count
+    assert result.diagnostics["maxima_occupancy"] == pytest.approx(
+        result.count / ceiling, rel=0.05
+    )

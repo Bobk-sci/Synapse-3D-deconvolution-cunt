@@ -220,6 +220,15 @@ def detect_puncta(
 
     seed_coords = np.argwhere(is_maximum & (best > threshold))
 
+    # A field can hold at most one maximum per min_separation neighbourhood.
+    # Approaching that ceiling means the puncta are packed closer than this
+    # sampling can resolve: the count becomes a lower bound, and the threshold
+    # calibration degrades too, since it assumes most local maxima are noise.
+    footprint_volume = float(np.prod(footprint_shape)) * dz * dy * dx
+    valid_volume = float(valid.sum()) * dz * dy * dx
+    max_resolvable = valid_volume / footprint_volume if footprint_volume > 0 else float("inf")
+    occupancy = len(seed_coords) / max_resolvable if max_resolvable else 0.0
+
     diagnostics = {
         "log_peak_median": round(peak_median, 6),
         "log_peak_mad": round(float(peak_noise), 6),
@@ -227,15 +236,41 @@ def detect_puncta(
         "threshold_sigma": float(threshold_sigma),
         "n_local_maxima": int(peak_values.size),
         "border_excluded_voxels": [int(bz), int(by), int(bx)],
+        "max_resolvable_puncta": int(max_resolvable),
+        "maxima_occupancy": round(float(occupancy), 4),
         "n_seeds": int(len(seed_coords)),
         "tophat_p99_9": float(np.percentile(tophat, 99.9)),
         "background_radius_um": float(background_radius_um),
         "scales_um": list(punctum_diameters_um),
     }
 
+    if occupancy > 0.3:
+        logger.warning(
+            "detected puncta fill %.0f%% of what this sampling can resolve "
+            "(%d of at most %d at min_separation_um=%.2f um). The field is near the "
+            "packing limit: counts are a LOWER BOUND, not a count. Sample finer.",
+            100 * occupancy, len(seed_coords), int(max_resolvable), min_separation_um,
+        )
+
     if len(seed_coords) == 0:
         empty = np.zeros((0,), dtype=float)
-        logger.warning("no punctum passed the threshold (%.4g on the LoG response)", threshold)
+        # Distinguish "nothing there" from "the calibration broke". The
+        # calibration assumes most local maxima are noise; in a field packed
+        # with puncta that assumption fails, the median of the maxima rises
+        # with the signal, and the threshold ends up above everything.
+        tophat_p999 = float(np.percentile(tophat, 99.9))
+        dense_field = tophat_p999 > 10 * estimate_noise_mad(tophat)
+        logger.warning(
+            "no punctum passed the threshold (%.4g on the LoG response). %s",
+            threshold,
+            "The image clearly carries signal (top-hat p99.9 = %.0f), so the "
+            "automatic threshold has broken down: it assumes most local maxima are "
+            "noise, which fails in a field packed with puncta. Set "
+            "detection.absolute_threshold, or sample finer." % tophat_p999
+            if dense_field else
+            "The image appears empty at %.1f sigma above the typical noise maximum."
+            % threshold_sigma,
+        )
         return DetectionResult(
             labels=np.zeros(data.shape, dtype=np.int32),
             centroids_um=np.zeros((0, 3), dtype=float),
