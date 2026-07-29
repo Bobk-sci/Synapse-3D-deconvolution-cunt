@@ -15,14 +15,87 @@ Un seul fichier de configuration pilote tout le batch.
 
 ## 1. Installation
 
-```bash
-conda env create -f environment.yml
-conda activate synapse-deconv
-pip install -e .
-pytest                      # 119 tests
+Aucun runtime Java n'est nécessaire. Choisissez **une** des deux voies.
+
+### Voie A — sans conda (la plus simple si vous avez déjà Python ≥ 3.10)
+
+<details open>
+<summary><b>Windows / PowerShell</b></summary>
+
+```powershell
+cd "C:\chemin\vers\Synapse-3D-deconvolution"
+
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+python -m pytest                      # 119 tests
 ```
 
-Aucun runtime Java n'est nécessaire.
+Si `Activate.ps1` est bloqué (« l'exécution de scripts est désactivée ») :
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+puis relancez la ligne `.\.venv\Scripts\Activate.ps1`. Cette autorisation ne
+vaut que pour la fenêtre PowerShell en cours, elle ne modifie rien durablement.
+
+</details>
+
+<details>
+<summary><b>Linux / macOS</b></summary>
+
+```bash
+cd /chemin/vers/Synapse-3D-deconvolution
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+python -m pytest
+```
+
+</details>
+
+### Voie B — avec conda
+
+```
+conda env create -f environment.yml
+conda activate synapse-deconv
+python -m pip install -e .
+python -m pytest
+```
+
+Sous PowerShell, `conda activate` ne fonctionne qu'après avoir fait **une fois**
+`conda init powershell` puis rouvert la fenêtre. Sinon, passez par
+« Anaconda PowerShell Prompt » dans le menu Démarrer.
+
+### Vérifier que ça a marché
+
+```
+python -m pytest
+```
+
+doit afficher `119 passed`. Si oui, l'installation est bonne.
+
+### Trois réflexes sous Windows
+
+1. **Préfixez toujours par `python -m`** : `python -m pytest`,
+   `python -m synapse_deconv run ...`. Les commandes courtes (`pytest`,
+   `synapse-deconv`) dépendent du `PATH` et échouent avec
+   *« n'est pas reconnu comme nom d'applet de commande »* dès que
+   l'environnement n'est pas activé. `python -m` marche dans tous les cas.
+2. **Guillemets sur les chemins contenant des espaces**, ce qui est le cas des
+   dossiers OneDrive d'entreprise (`"OneDrive - INERIS"`).
+3. **Le prompt doit commencer par `(.venv)` ou `(synapse-deconv)`.** S'il ne
+   commence par rien, l'environnement n'est pas activé : réactivez-le
+   (`.\.venv\Scripts\Activate.ps1`) à chaque nouvelle fenêtre PowerShell.
+
+> **Note OneDrive** — le pipeline écrit des OME-TIFF volumineux dans `results/`.
+> Dans un dossier synchronisé, OneDrive va tout téléverser et peut verrouiller
+> des fichiers en cours d'écriture. Pointez de préférence `output.directory`
+> vers un dossier local hors OneDrive, par exemple `D:\deconv_results` ou
+> `C:\Users\<vous>\deconv_results`.
 
 ## 2. Tester sur vos propres images
 
@@ -31,14 +104,22 @@ les erreurs qui invalideraient toute l'étude.
 
 ### Étape 0 — mettre quelques images de côté
 
+```powershell
+# Windows / PowerShell
+New-Item -ItemType Directory -Force data\raw
+Copy-Item "C:\chemin\vers\vos\*.oib" data\raw\
+```
+
 ```bash
+# Linux / macOS
 mkdir -p data/raw
 cp /chemin/vers/vos/*.oib data/raw/
 ```
 
 Prenez 2-3 stacks **représentatifs**, dont le plus brillant que vous ayez (il
 servira à régler le gain de sortie à l'étape 4). Pour un `.oif`, copiez le
-fichier `.oif` **et** son dossier `.oif.files` qui l'accompagne.
+fichier `.oif` **et** son dossier `.oif.files` qui l'accompagne
+(`Copy-Item -Recurse` sous PowerShell).
 
 Puis pointez la config dessus, en éditant `config/default.yaml` :
 
@@ -50,7 +131,7 @@ input:
 ### Étape 1 — la config est-elle cohérente ?
 
 ```bash
-synapse-deconv check config/default.yaml
+python -m synapse_deconv check config/default.yaml
 ```
 
 Valide la syntaxe, liste les fichiers trouvés, et signale les combinaisons
@@ -59,7 +140,7 @@ optiques douteuses. Ne lit pas encore les images.
 ### Étape 2 — le pipeline lit-il correctement VOS fichiers ? ⚠️
 
 ```bash
-synapse-deconv inspect config/default.yaml
+python -m synapse_deconv inspect config/default.yaml
 ```
 
 Rien n'est calculé ni écrit : la commande affiche ce qu'elle a réellement lu.
@@ -93,7 +174,7 @@ exvivo_g1_01.oif: 3 channel(s), 30x128x128 (ZYX), uint16,
 ### Étape 3 — regarder les PSF
 
 ```bash
-synapse-deconv psf config/default.yaml --out psf_preview
+python -m synapse_deconv psf config/default.yaml --out psf_preview
 ```
 
 Ouvrez les OME-TIFF dans Fiji (`Image > Stacks > Reslice` pour la vue XZ). Une
@@ -103,7 +184,7 @@ anneaux dominante. Le log donne les FWHM.
 ### Étape 4 — déconvoluer UN stack et lire le QC
 
 ```bash
-synapse-deconv run config/default.yaml --file mon_stack.oib
+python -m synapse_deconv run config/default.yaml --file mon_stack.oib
 ```
 
 Ouvrez `results/qc/mon_stack_decon_qc.png`. Ce que vous devez voir :
@@ -137,7 +218,7 @@ Relancez le même stack avec `--overwrite` jusqu'à ce que le QC vous convienne.
 ### Étape 5 — lancer tout le dossier
 
 ```bash
-synapse-deconv run config/default.yaml
+python -m synapse_deconv run config/default.yaml
 ```
 
 Ne changez plus **aucun** paramètre entre les groupes de votre étude. Vérifiez
@@ -160,7 +241,9 @@ pour tous les fichiers.
 Le pipeline sait générer un jeu synthétique à vérité connue pour se faire la
 main sans données réelles — voir §5.
 
-Sans installation, remplacez `synapse-deconv` par `python -m synapse_deconv`.
+Les commandes sont écrites `python -m synapse_deconv ...` : c'est la forme qui
+marche partout. Une fois l'environnement activé, `synapse-deconv ...` est un
+raccourci équivalent.
 
 Sorties dans `results/` :
 
@@ -263,7 +346,7 @@ Reproduire :
 ```bash
 python scripts/make_test_stack.py --out data/raw --n-stacks 3 --save-truth
 mkdir -p data/truth && mv data/raw/*_truth.ome.tif data/truth/
-synapse-deconv run config/default.yaml --intensity-scale 0.31
+python -m synapse_deconv run config/default.yaml --intensity-scale 0.31
 python scripts/validate_against_truth.py \
     --raw data/raw/synthetic_stack_01.ome.tif \
     --decon results/synthetic_stack_01_decon.ome.tif \
@@ -339,7 +422,7 @@ l'objectif. Le pipeline vous en avertit au démarrage.
 
 ### 6.4 Quelle profondeur mettre quand on ne la connaît pas
 
-`synapse-deconv depth config/default.yaml` simule une source ponctuelle à une
+`python -m synapse_deconv depth config/default.yaml` simule une source ponctuelle à une
 profondeur vraie donnée, la déconvolue avec la PSF de chaque profondeur
 supposée, et mesure ce qui est récupéré. Pour une source vraiment à 10 µm :
 

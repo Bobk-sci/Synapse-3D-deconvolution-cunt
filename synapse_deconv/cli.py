@@ -1,9 +1,15 @@
 """Command line entry point.
 
-    python -m synapse_deconv run    config/default.yaml
-    python -m synapse_deconv run    config/default.yaml --file one_stack.oib
-    python -m synapse_deconv check  config/default.yaml
-    python -m synapse_deconv psf    config/default.yaml --out psf_preview
+Installed as ``synapse-deconv``; ``python -m synapse_deconv`` is equivalent and
+works without the console script being on PATH, which is the usual failure mode
+on Windows when the environment has not been activated.
+
+    python -m synapse_deconv check   config/default.yaml
+    python -m synapse_deconv inspect config/default.yaml
+    python -m synapse_deconv psf     config/default.yaml --out psf_preview
+    python -m synapse_deconv depth   config/default.yaml
+    python -m synapse_deconv run     config/default.yaml --file one_stack.oib
+    python -m synapse_deconv run     config/default.yaml
 """
 
 from __future__ import annotations
