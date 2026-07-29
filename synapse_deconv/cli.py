@@ -85,6 +85,57 @@ def _log_parameters(cfg: Config) -> None:
     logger.info("=" * 78)
 
 
+def cmd_count(args: argparse.Namespace) -> int:
+    """Detect puncta, colocalise them and count synapses."""
+    cfg = load_config(args.config)
+    if args.output:
+        cfg.output.directory = args.output
+    if args.threshold_sigma:
+        cfg.detection.threshold_sigma = args.threshold_sigma
+    if args.tolerance_um:
+        cfg.colocalization.tolerance_um = args.tolerance_um
+    cfg.validate()
+
+    setup_logging(cfg)
+    _log_parameters(cfg)
+    _log_counting_parameters(cfg)
+
+    from .counting import run_counting
+
+    source = None
+    if args.file:
+        source = Path(args.file)
+        if not source.is_absolute() and not source.exists():
+            source = Path(cfg.input.directory) / args.file
+        if not source.exists():
+            logger.error("file not found: %s", source)
+            return 2
+        source = source.resolve()
+
+    results = run_counting(cfg, single_file=source)
+    return 1 if any(r.status != "ok" for r in results) else 0
+
+
+def _log_counting_parameters(cfg: Config) -> None:
+    d, c, a = cfg.detection, cfg.colocalization, cfg.analysis
+    logger.info("detection: LoG scales %s um, threshold %.1f x robust noise (MAD)",
+                d.punctum_diameters_um, d.threshold_sigma)
+    logger.info("           top-hat radius %.2f um, min separation %.2f um, "
+                "volume gate [%.4f, %s] um3",
+                d.background_radius_um, d.min_separation_um, d.min_volume_um3,
+                d.max_volume_um3)
+    if d.threshold_sigma_per_channel:
+        logger.info("           per-channel thresholds: %s", d.threshold_sigma_per_channel)
+    logger.info("coloc    : %s, tolerance %.3f um, one-to-one=%s, "
+                "ambiguous partners resolved=%s",
+                c.criterion, c.tolerance_um, c.one_to_one, c.resolve_ambiguous_partners)
+    logger.info("           pre=%s | excitatory post=%s | inhibitory post=%s",
+                c.presynaptic, c.postsynaptic_excitatory, c.postsynaptic_inhibitory)
+    logger.info("analysis : ROI=%s, border exclusion %.2f um, densities per %.0f um3",
+                a.roi_mask or "whole field", a.border_exclusion_um, a.density_unit_um3)
+    logger.info("=" * 78)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Write a fresh configuration file for the user to edit."""
     from .config import write_template
@@ -519,6 +570,19 @@ def build_parser() -> argparse.ArgumentParser:
     psf.add_argument("config")
     psf.add_argument("--out", help="destination directory")
     psf.set_defaults(func=cmd_psf)
+
+    count = sub.add_parser(
+        "count",
+        help="detect puncta, colocalise them and count synapses on deconvolved stacks",
+    )
+    count.add_argument("config")
+    count.add_argument("--file", help="process only this stack")
+    count.add_argument("--output", help="override output.directory")
+    count.add_argument("--threshold-sigma", type=float,
+                       help="override detection.threshold_sigma")
+    count.add_argument("--tolerance-um", type=float,
+                       help="override colocalization.tolerance_um")
+    count.set_defaults(func=cmd_count)
 
     init = sub.add_parser(
         "init", help="write a fresh configuration file to edit (start here)"

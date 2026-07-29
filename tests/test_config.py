@@ -52,6 +52,8 @@ def test_packaged_template_is_valid():
     cfg = load_config(template_path())
     assert len(cfg.channels) == 3
     assert [c.emission_nm for c in cfg.channels] == [421, 519, 617]
+    # The colocalisation roles must name channels that actually exist.
+    assert cfg.colocalization.presynaptic in {c.name for c in cfg.channels}
 
 
 def test_unknown_key_is_rejected():

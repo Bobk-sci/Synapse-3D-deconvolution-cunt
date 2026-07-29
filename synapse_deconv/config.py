@@ -185,6 +185,81 @@ class QCConfig:
 
 
 @dataclass
+class DetectionConfig:
+    """Per-channel 3D punctum detection."""
+
+    #: Expected punctum diameters in micrometres; one LoG scale is run per
+    #: entry and the best response per voxel is kept.
+    punctum_diameters_um: list[float] = field(default_factory=lambda: [0.25, 0.35, 0.50])
+    #: Detection threshold as a z-score above the robust (MAD) noise of the LoG
+    #: response. 5 is conservative, 3 permissive. Identical for every image.
+    threshold_sigma: float = 5.0
+    #: White top-hat radius. Must exceed the largest punctum radius, otherwise
+    #: the puncta are removed along with the background.
+    background_radius_um: float = 1.0
+    #: Minimum centre-to-centre distance between two detected maxima.
+    min_separation_um: float = 0.25
+    #: Size gate applied to the segmented regions.
+    min_volume_um3: float = 0.008
+    max_volume_um3: float | None = 2.0
+    #: Per-channel override of threshold_sigma, keyed by channel name. Use only
+    #: with a documented reason: it breaks the "one threshold for all" rule
+    #: across channels (it stays identical across images, which is what matters
+    #: for a group comparison).
+    threshold_sigma_per_channel: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class ColocalizationConfig:
+    """Turning apposed puncta into synapses."""
+
+    #: ``distance`` (centroid apposition, the default) or ``contact``
+    #: (segmented masks touching after a small dilation).
+    criterion: str = "distance"
+    #: Maximum 3D centre-to-centre distance, in micrometres. Euclidean in
+    #: physical space, so the anisotropic voxel is already accounted for.
+    tolerance_um: float = 0.30
+    #: Dilation applied to the presynaptic masks in ``contact`` mode.
+    contact_dilation_um: float = 0.10
+    #: One punctum takes part in at most one synapse, by globally optimal
+    #: assignment. Turning this off inflates counts in dense fields.
+    one_to_one: bool = True
+    #: A presynaptic punctum matching both post-synaptic markers is assigned to
+    #: the closer one instead of being counted twice.
+    resolve_ambiguous_partners: bool = True
+    #: Randomisation control: re-pair after randomly translating one channel, to
+    #: measure how many pairs the tolerance yields by chance at this density.
+    #: Reported alongside the observed count; 0 disables it.
+    chance_randomisations: int = 10
+    #: Channel roles, by channel name as declared in 'channels'. Left unset by
+    #: default so that a deconvolution-only config need not name synaptic
+    #: markers; the 'count' command requires them.
+    presynaptic: str = ""
+    postsynaptic_excitatory: str = ""
+    postsynaptic_inhibitory: str = ""
+
+
+@dataclass
+class AnalysisConfig:
+    """ROI restriction, density normalisation and sanity checks."""
+
+    #: Optional 3D mask (any readable stack, non-zero = inside). ``null`` uses
+    #: the whole field.
+    roi_mask: str | None = None
+    #: Voxels this far from the stack border are excluded: a punctum whose
+    #: neighbourhood is truncated cannot be measured or paired reliably.
+    border_exclusion_um: float = 0.5
+    #: Densities are reported per this volume.
+    density_unit_um3: float = 100.0
+    #: Flag an image whose punctum count per channel falls outside this range.
+    expected_puncta_per_100um3: list[float] = field(default_factory=lambda: [0.5, 500.0])
+    #: Flag an image whose detected puncta are barely above the noise.
+    min_snr_warn: float = 3.0
+    #: Where the CSVs go, relative to output.directory.
+    subdirectory: str = "counts"
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     file: str = "pipeline.log"
@@ -209,6 +284,9 @@ class Config:
     psf: PSFConfig = field(default_factory=PSFConfig)
     background: BackgroundConfig = field(default_factory=BackgroundConfig)
     deconvolution: DeconvolutionConfig = field(default_factory=DeconvolutionConfig)
+    detection: DetectionConfig = field(default_factory=DetectionConfig)
+    colocalization: ColocalizationConfig = field(default_factory=ColocalizationConfig)
+    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     qc: QCConfig = field(default_factory=QCConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
@@ -233,6 +311,9 @@ class Config:
             "psf": PSFConfig,
             "background": BackgroundConfig,
             "deconvolution": DeconvolutionConfig,
+            "detection": DetectionConfig,
+            "colocalization": ColocalizationConfig,
+            "analysis": AnalysisConfig,
             "qc": QCConfig,
             "logging": LoggingConfig,
             "processing": ProcessingConfig,
@@ -350,6 +431,93 @@ class Config:
         if self.processing.max_workers < 1:
             raise ConfigError("processing.max_workers must be >= 1")
 
+        self._validate_counting()
+
+    def _validate_counting(self) -> None:
+        """Detection / colocalisation / analysis sections."""
+        det = self.detection
+        if not det.punctum_diameters_um:
+            raise ConfigError("detection.punctum_diameters_um must list at least one diameter")
+        if any(d <= 0 for d in det.punctum_diameters_um):
+            raise ConfigError("detection.punctum_diameters_um entries must be > 0")
+        if det.threshold_sigma <= 0:
+            raise ConfigError("detection.threshold_sigma must be > 0")
+        if det.background_radius_um <= max(det.punctum_diameters_um) / 2:
+            raise ConfigError(
+                f"detection.background_radius_um ({det.background_radius_um}) must exceed the "
+                f"largest punctum radius ({max(det.punctum_diameters_um) / 2}); otherwise the "
+                "top-hat removes the puncta together with the background"
+            )
+        if det.min_separation_um <= 0:
+            raise ConfigError("detection.min_separation_um must be > 0")
+        if det.min_volume_um3 < 0:
+            raise ConfigError("detection.min_volume_um3 must be >= 0")
+        if det.max_volume_um3 is not None and det.max_volume_um3 <= det.min_volume_um3:
+            raise ConfigError("detection.max_volume_um3 must exceed min_volume_um3")
+        known = {c.name for c in self.channels}
+        unknown = set(det.threshold_sigma_per_channel) - known
+        if unknown:
+            raise ConfigError(
+                f"detection.threshold_sigma_per_channel names unknown channel(s) "
+                f"{sorted(unknown)}; declared channels are {sorted(known)}"
+            )
+
+        coloc = self.colocalization
+        if coloc.criterion not in ("distance", "contact"):
+            raise ConfigError("colocalization.criterion must be 'distance' or 'contact'")
+        if coloc.tolerance_um <= 0:
+            raise ConfigError("colocalization.tolerance_um must be > 0")
+        if coloc.contact_dilation_um < 0:
+            raise ConfigError("colocalization.contact_dilation_um must be >= 0")
+        if coloc.chance_randomisations < 0:
+            raise ConfigError("colocalization.chance_randomisations must be >= 0")
+        roles = {
+            "presynaptic": coloc.presynaptic,
+            "postsynaptic_excitatory": coloc.postsynaptic_excitatory,
+            "postsynaptic_inhibitory": coloc.postsynaptic_inhibitory,
+        }
+        for role, name in roles.items():
+            if name and name not in known:
+                raise ConfigError(
+                    f"colocalization.{role} = {name!r} is not one of the declared channels "
+                    f"{sorted(known)}"
+                )
+        assigned = [n for n in roles.values() if n]
+        if len(set(assigned)) != len(assigned):
+            raise ConfigError("colocalization roles must name three different channels")
+
+    def require_synaptic_roles(self) -> None:
+        """Check the roles needed by 'count'. Not part of validate(): a config
+        that only drives the deconvolution has no reason to name markers."""
+        coloc = self.colocalization
+        missing = [
+            role for role, name in (
+                ("presynaptic", coloc.presynaptic),
+                ("postsynaptic_excitatory", coloc.postsynaptic_excitatory),
+                ("postsynaptic_inhibitory", coloc.postsynaptic_inhibitory),
+            ) if not name
+        ]
+        if missing:
+            raise ConfigError(
+                f"counting synapses needs colocalization.{', colocalization.'.join(missing)} "
+                f"set to one of the declared channels {sorted(c.name for c in self.channels)}"
+            )
+
+        ana = self.analysis
+        if ana.density_unit_um3 <= 0:
+            raise ConfigError("analysis.density_unit_um3 must be > 0")
+        if ana.border_exclusion_um < 0:
+            raise ConfigError("analysis.border_exclusion_um must be >= 0")
+        if len(ana.expected_puncta_per_100um3) != 2:
+            raise ConfigError(
+                "analysis.expected_puncta_per_100um3 must be a [min, max] pair"
+            )
+        low, high = ana.expected_puncta_per_100um3
+        if low < 0 or high <= low:
+            raise ConfigError(
+                "analysis.expected_puncta_per_100um3 must satisfy 0 <= min < max"
+            )
+
     def advisories(self) -> list[str]:
         """Non-fatal warnings about parameter combinations worth a second look.
 
@@ -399,8 +567,13 @@ class Config:
         """Config subset that can change pixel values, used for the fingerprint."""
         d = self.to_dict()
         output = d.pop("output", {})
+        analysis = d.pop("analysis", {})
         for volatile in ("input", "qc", "logging", "processing", "source_path"):
             d.pop(volatile, None)
+        # Where the CSVs land does not change any number; everything else in
+        # the analysis section does.
+        analysis.pop("subdirectory", None)
+        d["analysis"] = analysis
         # Only the two output settings that alter the stored intensities count.
         d["output"] = {
             "bit_depth_policy": output.get("bit_depth_policy"),

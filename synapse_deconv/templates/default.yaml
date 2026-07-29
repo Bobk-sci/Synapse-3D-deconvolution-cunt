@@ -84,14 +84,18 @@ optics:
 
 # Un canal par marqueur, DANS L'ORDRE DES CANAUX DU FICHIER.
 # Le nombre de canaux doit correspondre exactement au fichier.
+# Nommez les canaux d'apres le MARQUEUR, pas le fluorophore : ce sont ces noms
+# que la section 'colocalization' utilise pour attribuer les roles synaptiques.
+# Verifiez que l'association marqueur <-> longueur d'onde correspond bien a
+# votre marquage (`inspect` affiche les longueurs d'onde lues dans le fichier).
 channels:
-  - name: Alexa405
+  - name: Bassoon            # presynaptique   -- Alexa 405
     emission_nm: 421
     excitation_nm: 405
-  - name: Alexa488
+  - name: PSD95              # post excitateur -- Alexa 488
     emission_nm: 519
     excitation_nm: 488
-  - name: Alexa594
+  - name: Gephyrin           # post inhibiteur -- Alexa 594
     emission_nm: 617
     excitation_nm: 594
 
@@ -155,3 +159,63 @@ logging:
 processing:
   max_workers: 1
   fail_fast: false
+
+# =============================================================================
+# COMPTAGE DES SYNAPSES  (sous-commande `count`, sur les stacks deconvolues)
+# =============================================================================
+
+detection:
+  # Diametres attendus des puncta, en um. Une echelle LoG par entree ; la
+  # meilleure reponse par voxel est conservee.
+  punctum_diameters_um: [0.25, 0.35, 0.50]
+  # Seuil = mediane des MAXIMA LOCAUX + N x MAD de ces maxima. Calibrer sur les
+  # maxima et non sur le volume entier est essentiel : la valeur typique d'un
+  # maximum de bruit est tres au-dessus de la mediane du volume.
+  # Le plateau est large (3 a 7 donnent souvent le meme resultat) -> parametre
+  # peu critique, ce qui est exactement ce qu'on veut pour la reproductibilite.
+  threshold_sigma: 5.0
+  # Rayon du top-hat : DOIT depasser le plus grand rayon de punctum, sinon le
+  # fond emporte les puncta. Definit aussi la bande de bord exclue (le top-hat
+  # n'y est pas defini et y produit de faux puncta).
+  background_radius_um: 1.0
+  min_separation_um: 0.25
+  min_volume_um3: 0.008
+  max_volume_um3: 2.0
+  # Seuil different par canal (a n'utiliser qu'avec une raison documentee) :
+  #   threshold_sigma_per_channel: {Gephyrin: 4.0}
+  threshold_sigma_per_channel: {}
+
+colocalization:
+  # distance : apposition centroide-a-centroide (defaut, adapte a la fente
+  #            synaptique de 20-30 nm, sous la resolution)
+  # contact  : masques segmentes qui se touchent apres dilatation
+  criterion: distance
+  # Distance 3D maximale, en um. EUCLIDIENNE PHYSIQUE : l'anisotropie du voxel
+  # est deja prise en compte puisque les centroides sont en um.
+  # C'est LE parametre a calibrer contre un comptage manuel.
+  tolerance_um: 0.30
+  contact_dilation_um: 0.10
+  # Un punctum ne participe qu'a une seule synapse (assignation globalement
+  # optimale). Desactiver gonfle les comptes en champ dense.
+  one_to_one: true
+  # Un punctum presynaptique proche a la fois de PSD-95 et de Gephyrin est
+  # attribue au plus proche au lieu d'etre compte deux fois.
+  resolve_ambiguous_partners: true
+  # Controle de hasard : re-apparie apres translation aleatoire d'un canal,
+  # pour mesurer combien de paires la tolerance donne par pure coincidence a
+  # cette densite. A REGARDER : si le hasard depasse 25 % de l'observe, le
+  # comptage est un majorant, pas une mesure.
+  chance_randomisations: 10
+  presynaptic: Bassoon
+  postsynaptic_excitatory: PSD95
+  postsynaptic_inhibitory: Gephyrin
+
+analysis:
+  # Masque 3D optionnel (non nul = interieur). null = tout le champ.
+  roi_mask: null
+  border_exclusion_um: 0.5
+  density_unit_um3: 100.0
+  # Alerte si la densite de puncta sort de cet intervalle (par 100 um3).
+  expected_puncta_per_100um3: [0.5, 500.0]
+  min_snr_warn: 3.0
+  subdirectory: counts
