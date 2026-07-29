@@ -1,0 +1,138 @@
+# =============================================================================
+# synapse_deconv -- configuration unique du pipeline
+#
+# Ce fichier pilote TOUT le batch. Deux runs avec le meme fichier donnent des
+# resultats identiques au bit pres. L'empreinte ("config fingerprint") affichee
+# dans le log est un hash des seuls parametres qui changent les valeurs de
+# pixels : notez-la dans votre cahier de manip.
+#
+# Toutes les longueurs sont en micrometres, les longueurs d'onde en nanometres.
+# =============================================================================
+
+input:
+  directory: data/raw
+  patterns: ["*.oib", "*.oif", "*.ome.tif", "*.ome.tiff"]
+  recursive: false
+
+output:
+  directory: results
+  suffix: "_decon"
+  overwrite: false
+  # clip             : conserve la photometrie absolue -> comparaison inter-groupes valide
+  # rescale_per_stack: normalise chaque stack -> JAMAIS pour une etude comparative
+  bit_depth_policy: clip
+  # Gain constant applique a TOUTES les images avant la conversion 16 bits.
+  # Richardson-Lucy concentre les photons d'un punctum sur beaucoup moins de
+  # voxels : le pic peut depasser 65535 meme si le brut n'etait pas sature.
+  # Si le log signale du clipping, il propose la valeur a mettre ici -- utilisez
+  # LA MEME pour toute l'etude, sinon les intensites ne sont plus comparables.
+  intensity_scale: 1.0
+  save_psf: true
+
+metadata:
+  # metadata = lit la taille de voxel dans le fichier, fallback ci-dessous si absente
+  # config   = force les valeurs ci-dessous quoi qu'il arrive
+  voxel_size_source: metadata
+  fallback_xy_um: 0.095
+  fallback_z_um: 0.30
+  # Olympus stocke la position du centre du premier et du dernier plan
+  # -> pas = (fin - debut) / (n - 1). Mettre "n" pour reproduire d'autres lecteurs.
+  spacing_divisor: n_minus_1
+  # Avertit si la valeur lue s'ecarte de plus de 25 % du fallback (erreur d'unite)
+  tolerance_warn_ratio: 0.25
+  read_channel_wavelengths: true
+
+optics:
+  numerical_aperture: 1.40
+  magnification: 60.0
+  # Huile d'immersion
+  immersion_ri: 1.515
+  immersion_ri_design: 1.515
+  # Lamelle
+  coverslip_ri: 1.515
+  coverslip_ri_design: 1.515
+  coverslip_thickness_um: 170.0
+  coverslip_thickness_design_um: 170.0
+  working_distance_um: 150.0
+  # ---------------------------------------------------------------------------
+  # DEUX PARAMETRES A VERIFIER -- ce sont eux qui pilotent l'aberration spherique
+  # ---------------------------------------------------------------------------
+  # Indice du milieu de montage :
+  #   ProLong Gold / Diamond durci ~ 1.46-1.47   (valeur par defaut ici)
+  #   Mowiol / Fluoromount        ~ 1.41-1.45
+  #   Vectashield (glycerol)      ~ 1.45
+  #   PBS / milieu aqueux         ~ 1.33         <- fort mismatch avec l'huile
+  sample_ri: 1.47
+  # Profondeur moyenne des synapses sous la lamelle. 2 um convient pour des
+  # cultures neuronales ; mettre 5-10 um pour des coupes.
+  particle_depth_um: 2.0
+
+# Un canal par marqueur, DANS L'ORDRE DES CANAUX DU FICHIER.
+# Le nombre de canaux doit correspondre exactement au fichier.
+channels:
+  - name: Alexa405
+    emission_nm: 421
+    excitation_nm: 405
+  - name: Alexa488
+    emission_nm: 519
+    excitation_nm: 488
+  - name: Alexa594
+    emission_nm: 617
+    excitation_nm: 594
+
+psf:
+  # gibson_lanni : gere le mismatch d'indice huile/echantillon (recommande)
+  # born_wolf    : cas ideal sans mismatch (comparaison / debug)
+  model: gibson_lanni
+  # emission : PSF d'emission seule (equivalent grand champ) -- defaut
+  # confocal : h_ex * (h_em (*) pinhole), plus fidele au FV1000, PSF plus fine
+  mode: emission
+  pinhole_airy_units: 1.0
+  pinhole_radius_um: null
+  # null = dimensionnement automatique a partir de l'optique et du voxel
+  xy_size: null
+  z_size: null
+  # Sous-echantillonnage : indispensable a 0.095 um/pixel ou le coeur de la PSF
+  # ne fait que ~2 pixels de large
+  oversample_xy: 2
+  oversample_z: 1
+  center_on_peak: false
+  integration_samples: 512
+  radial_samples: 1024
+  cache_dir: .psf_cache
+
+background:
+  # none       : Richardson-Lucy sur les comptes bruts (defaut, le plus neutre)
+  # constant   : soustrait constant_value, identique pour toutes les images (sur)
+  # percentile : estime le fond image par image (introduit une variabilite)
+  method: none
+  constant_value: 0.0
+  percentile: 0.1
+
+deconvolution:
+  algorithm: richardson_lucy
+  iterations: 25
+  backend: auto        # auto | numpy | cupy
+  dtype: float32
+  pad_mode: reflect    # reflect | edge | constant
+  epsilon: 1.0e-9
+  regularization: none # none | tv
+  tv_lambda: 0.002
+
+qc:
+  enabled: true
+  dpi: 150
+  percentile_clip: [0.1, 99.9]
+  # Gamma d'affichage du PNG uniquement (jamais applique aux donnees sauvees).
+  # 0.5 = racine carree : garde les puncta faibles visibles a cote des tres vifs.
+  display_gamma: 0.5
+  include_xz: true
+  subdirectory: qc
+
+logging:
+  level: INFO
+  file: pipeline.log
+
+processing:
+  max_workers: 1
+  fail_fast: false

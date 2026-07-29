@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.psf_cache/
+.venv/
+venv/
+
+# Données et sorties : ne jamais versionner des stacks
+data/
+results*/
+*.oib
+*.oif
+*.oif.files/
+*.ome.tif
+*.ome.tiff
+!docs/**/*.png

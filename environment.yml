@@ -1,0 +1,35 @@
+# Environnement conda du pipeline.
+#
+#   conda env create -f environment.yml
+#   conda activate synapse-deconv
+#   pip install -e .
+#
+# Aucun runtime Java n'est requis : la lecture des .oib/.oif passe par oiffile
+# (Python pur), pas par Bio-Formats.
+name: synapse-deconv
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - numpy>=1.24
+  - scipy>=1.10
+  - scikit-image>=0.20      # utilise par les scripts d'analyse, pas par le coeur
+  - tifffile>=2023.7.10
+  - matplotlib-base>=3.7
+  - pyyaml>=6.0
+  - pytest>=7.0
+  - pip
+  - pip:
+      - oiffile>=2023.8.30  # lecture .oib/.oif + metadonnees FluoView
+
+# --- Acceleration GPU (optionnelle) ------------------------------------------
+# Le backend CuPy est detecte automatiquement (deconvolution.backend: auto).
+# Sur une machine avec CUDA 12, ajouter dans l'environnement active :
+#
+#   conda install -c conda-forge cupy cuda-version=12
+#
+# Les resultats CPU et GPU sont identiques a la precision flottante pres.
+# Sans GPU, tout fonctionne : comptez ~20 s par stack 3 x 30 x 256 x 256
+# a 25 iterations sur un CPU recent.
