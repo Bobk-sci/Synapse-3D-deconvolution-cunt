@@ -156,13 +156,16 @@ def _resolve_channels(cfg: Config, stack: ImageStack) -> list[ChannelConfig]:
     return resolved
 
 
-def _subtract_background(volume: np.ndarray, cfg: Config) -> tuple[np.ndarray, float]:
+def _subtract_background(
+    volume: np.ndarray, cfg: Config, channel_index: int
+) -> tuple[np.ndarray, float]:
     """Apply the configured background subtraction. Returns (volume, level)."""
     method = cfg.background.method
     if method == "none":
         return volume, 0.0
     if method == "constant":
-        level = float(cfg.background.constant_value)
+        value = cfg.background.constant_value
+        level = float(value[channel_index] if isinstance(value, list) else value)
     else:
         level = float(np.percentile(volume, cfg.background.percentile))
     if level <= 0:
@@ -286,7 +289,7 @@ def process_stack(cfg: Config, source: Path, psf_cache: dict | None = None) -> S
         fwhm = measure_fwhm(psf.data, voxel)
 
         volume = _sanitise(raw[index], channel.name, stack.warnings)
-        volume, background_level = _subtract_background(volume, cfg)
+        volume, background_level = _subtract_background(volume, cfg, index)
 
         deconv: DeconvolutionResult = richardson_lucy(
             volume,

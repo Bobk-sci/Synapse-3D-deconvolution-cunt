@@ -148,7 +148,11 @@ class BackgroundConfig:
     #: (a fixed offset, identical for every image -- safe for group studies) or
     #: ``percentile`` (per-image estimate, introduces image-dependent variation).
     method: str = "none"
-    constant_value: float = 0.0
+    #: A single number applied to every channel, or one number per channel in
+    #: channel order. Detector pedestals usually differ a little between
+    #: channels; a per-channel list keeps each one honest without making the
+    #: subtraction image-dependent.
+    constant_value: float | list[float] = 0.0
     percentile: float = 0.1
 
 
@@ -318,6 +322,18 @@ class Config:
 
         if self.background.method not in ("none", "constant", "percentile"):
             raise ConfigError("background.method must be 'none', 'constant' or 'percentile'")
+        value = self.background.constant_value
+        if isinstance(value, list):
+            if len(value) != len(self.channels):
+                raise ConfigError(
+                    f"background.constant_value has {len(value)} entries but "
+                    f"{len(self.channels)} channel(s) are declared; give one value per "
+                    "channel in the same order, or a single number for all of them"
+                )
+            if any(not isinstance(v, (int, float)) or v < 0 for v in value):
+                raise ConfigError("background.constant_value entries must be numbers >= 0")
+        elif not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError("background.constant_value must be a number >= 0")
 
         if self.output.bit_depth_policy not in ("clip", "rescale_per_stack"):
             raise ConfigError(
@@ -443,11 +459,32 @@ def _windows_path_hint(text: str) -> str | None:
     )
 
 
+def _nearby_configs(path: Path) -> str:
+    """List the config files sitting next to a path that does not exist.
+
+    A mistyped file name is otherwise a dead end: the user has to go and look up
+    what they actually called it.
+    """
+    directories = [d for d in (path.parent, Path("config"), Path(".")) if d.is_dir()]
+    candidates: list[str] = []
+    for directory in directories:
+        for entry in sorted(directory.glob("*.yaml")) + sorted(directory.glob("*.json")):
+            text = str(entry)
+            if text not in candidates:
+                candidates.append(text)
+        if candidates:
+            break
+    if not candidates:
+        return ""
+    listed = "\n  ".join(candidates[:10])
+    return f"\n\nConfiguration files found nearby:\n  {listed}"
+
+
 def load_config(path: str | Path) -> Config:
     """Load and validate a YAML or JSON configuration file."""
     path = Path(path)
     if not path.is_file():
-        raise ConfigError(f"configuration file not found: {path}")
+        raise ConfigError(f"configuration file not found: {path}{_nearby_configs(path)}")
     text = path.read_text(encoding="utf-8")
     try:
         data = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)

@@ -276,3 +276,28 @@ def test_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     assert main(["init", str(destination)]) == 0
     assert main(["init", str(destination)]) == 2
     assert main(["init", str(destination), "--force"]) == 0
+
+
+def test_per_channel_background_values(tmp_path, raw_dir):
+    """Detector pedestals differ slightly between channels; allow one each."""
+    cfg = make_config(
+        tmp_path,
+        background={"method": "constant", "constant_value": [40.0, 90.0]},
+    )
+    result = process_stack(cfg, raw_dir / "stack_00.ome.tif")
+    assert [c["background_subtracted"] for c in result.channels] == [40.0, 90.0]
+
+
+def test_background_list_must_match_the_channel_count(tmp_path):
+    from synapse_deconv.config import ConfigError
+
+    with pytest.raises(ConfigError, match="one value per channel"):
+        make_config(tmp_path, background={"method": "constant",
+                                          "constant_value": [10.0, 20.0, 30.0]})
+
+
+def test_scalar_background_still_applies_to_every_channel(tmp_path, raw_dir):
+    cfg = make_config(tmp_path,
+                      background={"method": "constant", "constant_value": 50.0})
+    result = process_stack(cfg, raw_dir / "stack_00.ome.tif")
+    assert [c["background_subtracted"] for c in result.channels] == [50.0, 50.0]

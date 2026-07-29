@@ -33,6 +33,10 @@ metadata:
   # metadata = lit la taille de voxel dans le fichier, fallback ci-dessous si absente
   # config   = force les valeurs ci-dessous quoi qu'il arrive
   voxel_size_source: metadata
+  # Valeurs de SECOURS, utilisees seulement si les metadonnees sont absentes.
+  # Elles servent aussi de reference au controle de coherence : mettez-y la
+  # taille de voxel REELLE de vos acquisitions (lisible avec `inspect`), sinon
+  # vous recevrez un avertissement d'ecart a chaque image.
   fallback_xy_um: 0.095
   fallback_z_um: 0.30
   # Olympus stocke la position du centre du premier et du dernier plan
@@ -117,6 +121,10 @@ background:
   # constant   : soustrait constant_value, identique pour toutes les images (sur)
   # percentile : estime le fond image par image (introduit une variabilite)
   method: none
+  # Un seul nombre pour tous les canaux, OU une liste d'un nombre par canal
+  # (dans l'ordre des canaux) : les piedestaux des PMT different souvent un peu.
+  #   constant_value: 195
+  #   constant_value: [202, 192, 192]
   constant_value: 0.0
   percentile: 0.1
 
