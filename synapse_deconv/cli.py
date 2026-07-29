@@ -201,15 +201,49 @@ def cmd_inspect(args: argparse.Namespace) -> int:
                 logger.info("      pinhole in file: %.1f um (back-projected)",
                             found.pinhole_um)
 
+        undersampled = False
         for configured in cfg.channels[: stack.n_channels]:
             lateral, axial = theoretical_resolution(
                 configured.emission_nm, cfg.optics.numerical_aperture, cfg.optics.immersion_ri
             )
+            undersampled = undersampled or dx > lateral / 2
             logger.info(
                 "  %-12s Nyquist XY %.4f um (file %.4f%s) | Nyquist Z %.3f um (file %.3f%s)",
                 configured.name, lateral / 2, dx,
                 " OK" if dx <= lateral / 2 else " UNDERSAMPLED",
                 axial / 2, dz, " OK" if dz <= axial / 2 else " UNDERSAMPLED",
+            )
+
+        if undersampled:
+            # Turn the warning into an acquisition setting. On a laser scanner
+            # the XY pixel is field / pixel count, so either term can fix it.
+            n_x = stack.data.shape[3]
+            field_um = n_x * dx
+            finest = min(
+                theoretical_resolution(c.emission_nm, cfg.optics.numerical_aperture,
+                                       cfg.optics.immersion_ri)[0] / 2
+                for c in cfg.channels[: stack.n_channels]
+            )
+            needed_pixels = int(np.ceil(field_um / finest))
+            zoom_factor = dx / finest
+            logger.info(
+                "  Field of view is %.1f um (%d px). To reach Nyquist on every channel "
+                "(%.4f um/px), either:", field_um, n_x, finest,
+            )
+            logger.info(
+                "    - keep the zoom and scan %d x %d instead of %d x %d "
+                "(same field, %.1fx longer, %.2fx fewer photons per pixel), or",
+                needed_pixels, needed_pixels, n_x, n_x,
+                (needed_pixels / n_x) ** 2, (n_x / needed_pixels) ** 2,
+            )
+            logger.info(
+                "    - keep %d x %d and raise the zoom by x%.2f "
+                "(field shrinks to %.1f um, same scan time).",
+                n_x, n_x, zoom_factor, field_um / zoom_factor,
+            )
+            logger.info(
+                "    Deconvolution cannot recover detail below 2 pixels (%.3f um here); "
+                "that floor is set by the acquisition, not by the algorithm.", 2 * dx,
             )
 
         logger.info("  %-12s %8s %8s %8s %10s %8s %10s", "channel", "min", "max", "mean",

@@ -169,3 +169,49 @@ def test_inspect_reports_a_channel_count_mismatch(tmp_path, capsys):
 
     assert main(["inspect", str(path)]) == 1
     assert "CHANNEL COUNT MISMATCH" in capsys.readouterr().out
+
+
+def test_inspect_gives_acquisition_settings_when_undersampled(tmp_path, capsys):
+    """An undersampling warning is only useful if it says what to change."""
+    import yaml
+
+    from synapse_deconv.cli import main
+
+    write_oif(tmp_path / "raw", stem="scan", shape=(1, 8, 128, 128), xy_um=0.137)
+    cfg = {
+        "input": {"directory": str(tmp_path / "raw")},
+        "output": {"directory": str(tmp_path / "out")},
+        "channels": [{"name": "Alexa405", "emission_nm": 421}],
+        "metadata": {"fallback_xy_um": 0.137},
+        "logging": {"file": ""},
+    }
+    path = tmp_path / "cfg.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+
+    assert main(["inspect", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "UNDERSAMPLED" in out
+    assert "raise the zoom by" in out
+    assert "cannot recover detail below 2 pixels" in out
+
+
+def test_inspect_stays_quiet_when_sampling_is_adequate(tmp_path, capsys):
+    import yaml
+
+    from synapse_deconv.cli import main
+
+    write_oif(tmp_path / "raw", stem="scan", shape=(1, 8, 128, 128), xy_um=0.06)
+    cfg = {
+        "input": {"directory": str(tmp_path / "raw")},
+        "output": {"directory": str(tmp_path / "out")},
+        "channels": [{"name": "Alexa405", "emission_nm": 421}],
+        "metadata": {"fallback_xy_um": 0.06},
+        "logging": {"file": ""},
+    }
+    path = tmp_path / "cfg.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+
+    assert main(["inspect", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "UNDERSAMPLED" not in out
+    assert "raise the zoom by" not in out

@@ -29,7 +29,7 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-python -m pytest                      # 125 tests
+python -m pytest                      # 130 tests
 ```
 
 Si `Activate.ps1` est bloqué (« l'exécution de scripts est désactivée ») :
@@ -76,7 +76,7 @@ Sous PowerShell, `conda activate` ne fonctionne qu'après avoir fait **une fois*
 python -m pytest
 ```
 
-doit afficher `125 passed`. Si oui, l'installation est bonne.
+doit afficher `130 passed`. Si oui, l'installation est bonne.
 
 ### Trois réflexes sous Windows
 
@@ -572,7 +572,53 @@ deconvolution:
   tv_lambda: 0.01
 ```
 
-### 6.7 L'échantillonnage à 421 nm
+### 6.7 Réduire la taille de pixel XY (réglage d'acquisition)
+
+Sur un scanner laser, le pixel XY est entièrement déterminé par deux réglages :
+
+```
+pixel XY = champ observé / nombre de pixels
+```
+
+et le champ observé dépend du **zoom** du scanner. Il n'y a donc que deux
+leviers, et `inspect` calcule les deux pour vous quand il détecte un
+sous-échantillonnage :
+
+```
+Field of view is 70.1 um (512 px). To reach Nyquist on every channel (0.0917 um/px), either:
+  - keep the zoom and scan 765 x 765 instead of 512 x 512 (same field, 2.2x longer,
+    0.45x fewer photons per pixel), or
+  - keep 512 x 512 and raise the zoom by x1.49 (field shrinks to 47.0 um, same scan time).
+  Deconvolution cannot recover detail below 2 pixels (0.274 um here); that floor is
+  set by the acquisition, not by the algorithm.
+```
+
+**Levier 1 — augmenter le format d'image**, à zoom constant. Le champ ne bouge
+pas, donc vous gardez le même nombre de cellules par image. Exemple pour un
+champ de 70 µm :
+
+| Format | Pixel | 405 | 488 | 594 | Durée | Photons/pixel |
+|---|---|---|---|---|---|---|
+| 512 | 0,137 µm | non | non | non | ×1,00 | ×1,00 |
+| 640 | 0,110 µm | non | OK | OK | ×1,56 | ×0,64 |
+| **800** | **0,088 µm** | **OK** | **OK** | **OK** | ×2,44 | ×0,41 |
+| 1024 | 0,069 µm | OK | OK | OK | ×4,00 | ×0,25 |
+
+**Levier 2 — augmenter le zoom**, à format constant. La durée de scan ne change
+pas, mais le champ rétrécit d'autant : il faudra plus de champs pour la même
+statistique.
+
+Le coût caché est le même dans les deux cas : **un pixel plus petit collecte
+moins de photons**. Passer de 512 à 800 divise le signal par pixel par 2,4
+(SNR ÷1,6). Pour le compenser il faut augmenter le temps de séjour ou moyenner
+2 lignes — ce qui ramène le photoblanchiment au niveau du levier 1 à durée
+doublée. Il n'y a pas de repas gratuit : plus de résolution = plus de dose.
+
+**Ne sur-échantillonnez pas non plus.** Au-delà de ~2,3 échantillons par élément
+de résolution, vous ne gagnez plus d'information et vous ne faites que blanchir
+l'échantillon. 800×800 suffit ici ; 1024 est déjà du gaspillage.
+
+### 6.8 L'échantillonnage à 421 nm
 
 À 0,095 µm/pixel, le critère de Nyquist pour le canal 421 nm demande 0,0917 µm :
 vous êtes **très légèrement sous-échantillonné** sur ce canal. `check` le
@@ -644,7 +690,7 @@ synapse_deconv/
 scripts/
   make_test_stack.py          génère un stack synthétique à vérité connue
   validate_against_truth.py   mesure FWHM et conservation d'intensité
-tests/                        125 tests
+tests/                        130 tests
 ```
 
 Chaque module est utilisable seul :
