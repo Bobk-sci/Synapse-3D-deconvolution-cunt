@@ -96,6 +96,12 @@ def cmd_count(args: argparse.Namespace) -> int:
         cfg.detection.threshold_sigma = args.threshold_sigma
     if args.tolerance_um:
         cfg.colocalization.tolerance_um = args.tolerance_um
+    if args.presynaptic:
+        cfg.colocalization.presynaptic = args.presynaptic
+    if args.postsynaptic_excitatory:
+        cfg.colocalization.postsynaptic_excitatory = args.postsynaptic_excitatory
+    if args.postsynaptic_inhibitory:
+        cfg.colocalization.postsynaptic_inhibitory = args.postsynaptic_inhibitory
     cfg.validate()
 
     setup_logging(cfg)
@@ -588,6 +594,15 @@ def build_parser() -> argparse.ArgumentParser:
                        help="override detection.threshold_sigma")
     count.add_argument("--tolerance-um", type=float,
                        help="override colocalization.tolerance_um")
+    count.add_argument("--presynaptic",
+                       help="override colocalization.presynaptic (channel name). "
+                            "Permuting the three roles and comparing "
+                            "fraction_pre_paired identifies which marker sits on "
+                            "which fluorophore when the acquisition sheet is lost")
+    count.add_argument("--postsynaptic-excitatory",
+                       help="override colocalization.postsynaptic_excitatory")
+    count.add_argument("--postsynaptic-inhibitory",
+                       help="override colocalization.postsynaptic_inhibitory")
     count.set_defaults(func=cmd_count)
 
     init = sub.add_parser(
