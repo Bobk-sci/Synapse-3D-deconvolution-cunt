@@ -29,7 +29,7 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-python -m pytest                      # 119 tests
+python -m pytest                      # 125 tests
 ```
 
 Si `Activate.ps1` est bloqué (« l'exécution de scripts est désactivée ») :
@@ -76,7 +76,7 @@ Sous PowerShell, `conda activate` ne fonctionne qu'après avoir fait **une fois*
 python -m pytest
 ```
 
-doit afficher `119 passed`. Si oui, l'installation est bonne.
+doit afficher `125 passed`. Si oui, l'installation est bonne.
 
 ### Trois réflexes sous Windows
 
@@ -121,7 +121,25 @@ servira à régler le gain de sortie à l'étape 4). Pour un `.oif`, copiez le
 fichier `.oif` **et** son dossier `.oif.files` qui l'accompagne
 (`Copy-Item -Recurse` sous PowerShell).
 
-Puis pointez la config dessus, en éditant `config/default.yaml` :
+Puis créez **votre** fichier de configuration et pointez-le sur ce dossier :
+
+```powershell
+python -m synapse_deconv init
+```
+
+Cela écrit `config/my_study.yaml`, une copie du modèle de référence. Éditez
+**cette copie**, jamais le modèle : c'est lui que la suite de tests valide.
+
+> ⚠️ **Chemins Windows dans le YAML** — n'utilisez **jamais** de guillemets
+> doubles. En YAML, `"C:\Users\..."` interprète `\U` comme un code
+> d'échappement et casse le fichier. Trois écritures correctes :
+> ```yaml
+> directory: 'C:\Users\lucas\data'     # guillemets simples
+> directory: C:\Users\lucas\data       # sans guillemets
+> directory: C:/Users/lucas/data        # barres obliques (marche sous Windows)
+> ```
+
+Dans `config/my_study.yaml` :
 
 ```yaml
 input:
@@ -131,7 +149,7 @@ input:
 ### Étape 1 — la config est-elle cohérente ?
 
 ```bash
-python -m synapse_deconv check config/default.yaml
+python -m synapse_deconv check config/my_study.yaml
 ```
 
 Valide la syntaxe, liste les fichiers trouvés, et signale les combinaisons
@@ -140,7 +158,7 @@ optiques douteuses. Ne lit pas encore les images.
 ### Étape 2 — le pipeline lit-il correctement VOS fichiers ? ⚠️
 
 ```bash
-python -m synapse_deconv inspect config/default.yaml
+python -m synapse_deconv inspect config/my_study.yaml
 ```
 
 Rien n'est calculé ni écrit : la commande affiche ce qu'elle a réellement lu.
@@ -174,7 +192,7 @@ exvivo_g1_01.oif: 3 channel(s), 30x128x128 (ZYX), uint16,
 ### Étape 3 — regarder les PSF
 
 ```bash
-python -m synapse_deconv psf config/default.yaml --out psf_preview
+python -m synapse_deconv psf config/my_study.yaml --out psf_preview
 ```
 
 Ouvrez les OME-TIFF dans Fiji (`Image > Stacks > Reslice` pour la vue XZ). Une
@@ -184,7 +202,7 @@ anneaux dominante. Le log donne les FWHM.
 ### Étape 4 — déconvoluer UN stack et lire le QC
 
 ```bash
-python -m synapse_deconv run config/default.yaml --file mon_stack.oib
+python -m synapse_deconv run config/my_study.yaml --file mon_stack.oib
 ```
 
 Ouvrez `results/qc/mon_stack_decon_qc.png`. Ce que vous devez voir :
@@ -218,7 +236,7 @@ Relancez le même stack avec `--overwrite` jusqu'à ce que le QC vous convienne.
 ### Étape 5 — lancer tout le dossier
 
 ```bash
-python -m synapse_deconv run config/default.yaml
+python -m synapse_deconv run config/my_study.yaml
 ```
 
 Ne changez plus **aucun** paramètre entre les groupes de votre étude. Vérifiez
@@ -346,7 +364,7 @@ Reproduire :
 ```bash
 python scripts/make_test_stack.py --out data/raw --n-stacks 3 --save-truth
 mkdir -p data/truth && mv data/raw/*_truth.ome.tif data/truth/
-python -m synapse_deconv run config/default.yaml --intensity-scale 0.31
+python -m synapse_deconv run config/my_study.yaml --intensity-scale 0.31
 python scripts/validate_against_truth.py \
     --raw data/raw/synthetic_stack_01.ome.tif \
     --decon results/synthetic_stack_01_decon.ome.tif \
@@ -422,7 +440,7 @@ l'objectif. Le pipeline vous en avertit au démarrage.
 
 ### 6.4 Quelle profondeur mettre quand on ne la connaît pas
 
-`python -m synapse_deconv depth config/default.yaml` simule une source ponctuelle à une
+`python -m synapse_deconv depth config/my_study.yaml` simule une source ponctuelle à une
 profondeur vraie donnée, la déconvolue avec la PSF de chaque profondeur
 supposée, et mesure ce qui est récupéré. Pour une source vraiment à 10 µm :
 
@@ -461,7 +479,67 @@ Pour de l'ex vivo, si vous n'avez vraiment aucun repère : partez de 8 µm (vale
 par défaut du fichier de config), et si vous imagez délibérément juste sous la
 lamelle, descendez à 5 µm.
 
-### 6.5 L'échantillonnage à 421 nm
+### 6.5 Données 12 bits : la saturation ne se voit pas à 65535
+
+Le FV1000 numérise sur **12 bits** : le plein calibre est **4095**, pas 65535,
+même si le fichier est stocké en conteneur 16 bits. Un canal qui affiche
+`max 4095` est saturé. Le pipeline détecte automatiquement le plein calibre
+(255 / 1023 / 4095 / 16383 / 65535) et le signale :
+
+```
+WARNING Alexa488: 8213 voxel(s) (0.412%) at 4095, the full scale of a 12-bit
+        acquisition. Saturation violates the Poisson model; Richardson-Lucy
+        redistributes intensity around clipped voxels...
+```
+
+Les voxels écrêtés ne sont plus quantitatifs : Richardson-Lucy y redistribue de
+l'intensité et fabrique un halo. Si les structures concernées comptent dans
+votre mesure, il faut réacquérir avec moins de gain PMT ou moins de laser.
+
+### 6.6 Régler la déconvolution sur du tissu dense et bruité
+
+Sur un stack synthétique calibré pour ressembler à de l'ex vivo 12 bits
+(offset 180, `mean` 346, 0,004 % de voxels saturés — comparable à des données
+réelles), voici l'effet réel des réglages. « Concentration » = fraction de
+l'énergie d'un punctum ramenée dans son cœur ; « CNR » = rapport
+contraste/bruit, relatif au stack brut.
+
+| Configuration | Concentration | Bruit de fond | CNR |
+|---|---|---|---|
+| brut, non déconvolué | 5,5 % | 68,3 | ×1,00 |
+| `background: none`, 25 it | 19,3 % | 61,0 | ×3,94 |
+| **`background: constant 180`, 25 it** | **30,3 %** | **48,4** | **×7,83** |
+| `constant 180`, 10 it | 19,7 % | 53,0 | ×4,64 |
+| `constant 180`, 40 it | 34,9 % | 47,5 | ×8,50 |
+| `constant 180`, 40 it + TV 0.01 | 32,3 % | 46,2 | **×8,72** |
+| `constant 180`, 80 it + TV 0.01 | 34,8 % | 46,9 | ×8,47 |
+
+Trois enseignements, contre-intuitifs pour deux d'entre eux :
+
+1. **Soustraire l'offset double le CNR.** C'est de loin le réglage le plus
+   rentable, et il est gratuit. Sans lui, Richardson-Lucy passe l'essentiel de
+   son travail à « déconvoluer » un piédestal constant.
+2. **Réduire le nombre d'itérations ne règle pas le bruit** — 10 itérations sont
+   nettement pires que 25. Le bruit apparent vient du fond non soustrait, pas
+   d'un excès d'itérations. Une fois l'offset retiré, **monter** à 40 itérations
+   améliore encore.
+3. **La régularisation TV rend le plateau plus plat.** Sans elle le CNR
+   redescend après 40 itérations ; avec `tv_lambda: 0.01` il reste stable de 40 à
+   60, ce qui rend le réglage moins critique d'une image à l'autre.
+
+Réglage recommandé pour ce type de données :
+
+```yaml
+background:
+  method: constant
+  constant_value: 180        # votre 'bg est.' de l'étape 2
+deconvolution:
+  iterations: 40
+  regularization: tv
+  tv_lambda: 0.01
+```
+
+### 6.7 L'échantillonnage à 421 nm
 
 À 0,095 µm/pixel, le critère de Nyquist pour le canal 421 nm demande 0,0917 µm :
 vous êtes **très légèrement sous-échantillonné** sur ce canal. `check` le
@@ -529,11 +607,11 @@ synapse_deconv/
   writers.py         OME-TIFF 16 bits calibré, politiques de conversion
   qc.py              statistiques d'intensité et figures MIP avant/après
   pipeline.py        traitement d'un stack, batch, manifeste
-  cli.py             sous-commandes run / check / inspect / psf / depth
+  cli.py             sous-commandes init / check / inspect / psf / depth / run
 scripts/
   make_test_stack.py          génère un stack synthétique à vérité connue
   validate_against_truth.py   mesure FWHM et conservation d'intensité
-tests/                        119 tests
+tests/                        125 tests
 ```
 
 Chaque module est utilisable seul :

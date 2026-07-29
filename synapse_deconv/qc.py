@@ -19,7 +19,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ChannelStats", "compute_stats", "estimate_background", "write_qc_figure"]
+__all__ = ["ChannelStats", "compute_stats", "detect_saturation_level",
+           "estimate_background", "write_qc_figure"]
 
 _UINT16_MAX = 65535
 
@@ -49,9 +50,37 @@ class ChannelStats:
         return asdict(self)
 
 
-def compute_stats(volume: np.ndarray, saturation_level: int = _UINT16_MAX) -> ChannelStats:
-    """Intensity statistics for a 3D volume (raw uint16 or deconvolved float)."""
+#: Full-scale values of the detector depths met in practice. A FluoView PMT is
+#: usually digitised on 12 bits and stored in a 16-bit container, so the ceiling
+#: that matters is 4095, not 65535.
+_FULL_SCALE_CANDIDATES = (255, 1023, 4095, 16383, 65535)
+
+
+def detect_saturation_level(volume: np.ndarray) -> int | None:
+    """Full-scale value the acquisition clipped at, or None if it did not.
+
+    Comparing against 65535 would silently miss saturation in 12-bit data, which
+    is exactly the case that breaks Richardson-Lucy: clipped voxels violate the
+    Poisson model and the algorithm redistributes intensity around them.
+    """
     data = np.asarray(volume)
+    if data.size == 0 or not np.issubdtype(data.dtype, np.integer):
+        return None
+    peak = int(data.max())
+    return peak if peak in _FULL_SCALE_CANDIDATES else None
+
+
+def compute_stats(
+    volume: np.ndarray, saturation_level: int | None = None
+) -> ChannelStats:
+    """Intensity statistics for a 3D volume (raw uint16 or deconvolved float).
+
+    ``saturation_level`` defaults to the detector full scale inferred from the
+    data; pass an explicit value to override the inference.
+    """
+    data = np.asarray(volume)
+    if saturation_level is None:
+        saturation_level = detect_saturation_level(data) or _UINT16_MAX
     finite_mask = np.isfinite(data) if np.issubdtype(data.dtype, np.floating) else None
     n_nan = int((~finite_mask).sum()) if finite_mask is not None else 0
     values = data[finite_mask] if n_nan else data.ravel()

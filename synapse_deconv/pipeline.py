@@ -23,7 +23,7 @@ import numpy as np
 from .config import ChannelConfig, Config
 from .deconvolution import DeconvolutionResult, richardson_lucy
 from .psf import PSFResult, compute_psf, measure_fwhm, theoretical_resolution
-from .qc import ChannelStats, compute_stats, write_qc_figure
+from .qc import ChannelStats, compute_stats, detect_saturation_level, write_qc_figure
 from .readers import ImageStack, ReadError, is_supported, read_stack
 from .writers import to_uint16, write_ome_tiff
 
@@ -260,11 +260,16 @@ def process_stack(cfg: Config, source: Path, psf_cache: dict | None = None) -> S
 
         before = compute_stats(raw[index])
         stats_before.append(before)
-        if before.saturated_fraction > 0.001:
+        full_scale = detect_saturation_level(raw[index])
+        if full_scale is not None and before.saturated_fraction > 0.0001:
+            bits = int(round(np.log2(full_scale + 1)))
             stack.warnings.append(
                 f"{channel.name}: {before.saturated_voxels} voxel(s) "
-                f"({100 * before.saturated_fraction:.2f}%) at 65535. Saturation violates the "
-                "Poisson model; Richardson-Lucy will redistribute intensity around them"
+                f"({100 * before.saturated_fraction:.3f}%) at {full_scale}, the full scale of "
+                f"a {bits}-bit acquisition. Saturation violates the Poisson model; "
+                "Richardson-Lucy redistributes intensity around clipped voxels, so peak "
+                "intensities there are not quantitative. Lower the PMT gain or the laser "
+                "power and re-acquire if those structures matter"
             )
 
         key = (channel.name, channel.emission_nm, channel.excitation_nm, voxel)

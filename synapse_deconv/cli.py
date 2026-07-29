@@ -85,6 +85,29 @@ def _log_parameters(cfg: Config) -> None:
     logger.info("=" * 78)
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    """Write a fresh configuration file for the user to edit."""
+    from .config import write_template
+
+    destination = Path(args.output or "config/my_study.yaml")
+    try:
+        written = write_template(destination, overwrite=args.force)
+    except ConfigError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
+
+    print(f"Wrote {written}")
+    print()
+    print("Edit it, then:")
+    print(f"  python -m synapse_deconv check   {written}")
+    print(f"  python -m synapse_deconv inspect {written}")
+    print(f"  python -m synapse_deconv run     {written} --file one_stack.oib")
+    print()
+    print("Windows paths: use single quotes or forward slashes, never double quotes.")
+    print(r"  directory: 'C:\Users\you\data'      directory: C:/Users/you/data")
+    return 0
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     """Report what the pipeline reads from real files, without deconvolving.
 
@@ -96,10 +119,11 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     setup_logging(cfg)
 
+    import numpy as np
 
     from .pipeline import discover_inputs
     from .psf import theoretical_resolution
-    from .qc import compute_stats, estimate_background
+    from .qc import compute_stats, detect_saturation_level, estimate_background
     from .readers import ReadError, read_stack
 
     if args.file:
@@ -196,9 +220,11 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             # background.constant_value (the detector offset).
             background = estimate_background(stack.data[index])
             name = cfg.channels[index].name if index < len(cfg.channels) else f"ch{index}"
+            full_scale = detect_saturation_level(stack.data[index])
             note = ""
-            if stats.saturated_fraction > 0.001:
-                note = "  <-- SATURATED"
+            if full_scale is not None and stats.saturated_fraction > 0.0001:
+                bits = int(round(np.log2(full_scale + 1)))
+                note = f"  <-- SATURATED at {full_scale} ({bits}-bit full scale)"
             logger.info("  %-12s %9.0f %9.0f %9.1f %9.0f %11d%s", name,
                         stats.min, stats.max, stats.mean, background,
                         stats.saturated_voxels, note)
@@ -449,6 +475,15 @@ def build_parser() -> argparse.ArgumentParser:
     psf.add_argument("config")
     psf.add_argument("--out", help="destination directory")
     psf.set_defaults(func=cmd_psf)
+
+    init = sub.add_parser(
+        "init", help="write a fresh configuration file to edit (start here)"
+    )
+    init.add_argument("output", nargs="?",
+                      help="destination (default config/my_study.yaml)")
+    init.add_argument("--force", action="store_true",
+                      help="overwrite an existing file")
+    init.set_defaults(func=cmd_init)
 
     inspect = sub.add_parser(
         "inspect",

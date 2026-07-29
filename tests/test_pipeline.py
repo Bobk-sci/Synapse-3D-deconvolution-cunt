@@ -255,3 +255,24 @@ def test_depth_command_psf_only(tmp_path, raw_dir, capsys):
     out = capsys.readouterr().out
     assert "FWHM axial" in out
     assert "axial concentration" not in out
+
+
+def test_init_writes_a_usable_config(tmp_path, capsys):
+    """'init' is the documented starting point; its output must run as-is."""
+    from synapse_deconv.cli import main
+    from synapse_deconv.config import load_config
+
+    destination = tmp_path / "config" / "my_study.yaml"
+    assert main(["init", str(destination)]) == 0
+    assert destination.is_file()
+    assert load_config(destination).optics.numerical_aperture == 1.40
+    assert "Wrote" in capsys.readouterr().out
+
+
+def test_init_refuses_to_overwrite_without_force(tmp_path, capsys):
+    from synapse_deconv.cli import main
+
+    destination = tmp_path / "cfg.yaml"
+    assert main(["init", str(destination)]) == 0
+    assert main(["init", str(destination)]) == 2
+    assert main(["init", str(destination), "--force"]) == 0

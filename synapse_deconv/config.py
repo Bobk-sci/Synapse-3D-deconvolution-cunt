@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-__all__ = ["Config", "ConfigError", "load_config"]
+__all__ = ["Config", "ConfigError", "load_config", "template_path", "write_template"]
 
 
 class ConfigError(ValueError):
@@ -397,6 +398,51 @@ class Config:
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+def template_path() -> Path:
+    """Path of the reference configuration shipped inside the package.
+
+    It lives in the package rather than in the repository so that it stays
+    pristine: it is the file :func:`write_template` copies from, and the one the
+    test suite validates. Users edit their own copy, never this one.
+    """
+    return Path(__file__).parent / "templates" / "default.yaml"
+
+
+def write_template(destination: str | Path, *, overwrite: bool = False) -> Path:
+    """Copy the reference configuration to ``destination`` for the user to edit."""
+    destination = Path(destination)
+    if destination.exists() and not overwrite:
+        raise ConfigError(
+            f"{destination} already exists; pass --force to replace it "
+            "(this would discard your settings)"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(template_path().read_text(encoding="utf-8"), encoding="utf-8")
+    return destination
+
+
+def _windows_path_hint(text: str) -> str | None:
+    """Explain the double-quoted Windows path trap, if that is what happened.
+
+    In YAML a double-quoted scalar processes backslash escapes, so
+    ``"C:\\Users\\..."`` is read as an invalid ``\\U`` unicode escape. Single
+    quotes and bare scalars do not, and forward slashes work on Windows too.
+    PyYAML's own message ("expected escape sequence of 8 hexadecimal numbers")
+    gives no hint of any of this.
+    """
+    offender = re.search(r'^\s*(\w+)\s*:\s*"([A-Za-z]:\\|\\\\)[^"]*"', text, re.MULTILINE)
+    if offender is None:
+        return None
+    key = offender.group(1)
+    return (
+        f"the value of '{key}' looks like a Windows path in DOUBLE quotes. YAML reads "
+        "backslashes in double-quoted text as escape codes, so C:\\Users becomes an "
+        "invalid \\U escape. Use single quotes, no quotes, or forward slashes:\n"
+        f"    {key}: 'C:\\Users\\you\\data'\n"
+        f"    {key}: C:/Users/you/data"
+    )
+
+
 def load_config(path: str | Path) -> Config:
     """Load and validate a YAML or JSON configuration file."""
     path = Path(path)
@@ -406,7 +452,13 @@ def load_config(path: str | Path) -> Config:
     try:
         data = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
     except (yaml.YAMLError, json.JSONDecodeError) as exc:
-        raise ConfigError(f"{path}: could not parse configuration ({exc})") from exc
+        hint = _windows_path_hint(text)
+        message = f"{path}: could not parse configuration"
+        if hint:
+            message += f".\n\n{hint}\n\nParser said: {exc}"
+        else:
+            message += f" ({exc})"
+        raise ConfigError(message) from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path}: top level must be a mapping")
     data["source_path"] = str(path.resolve())

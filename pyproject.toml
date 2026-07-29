@@ -28,6 +28,9 @@ synapse-deconv = "synapse_deconv.cli:main"
 [tool.setuptools.packages.find]
 include = ["synapse_deconv*"]
 
+[tool.setuptools.package-data]
+synapse_deconv = ["templates/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::RuntimeWarning"]

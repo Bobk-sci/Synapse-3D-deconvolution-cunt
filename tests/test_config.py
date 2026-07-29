@@ -7,7 +7,13 @@ import json
 import pytest
 import yaml
 
-from synapse_deconv.config import Config, ConfigError, load_config
+from synapse_deconv.config import (
+    Config,
+    ConfigError,
+    load_config,
+    template_path,
+    write_template,
+)
 
 MINIMAL = {
     "channels": [
@@ -41,8 +47,9 @@ def test_loads_yaml_and_json(tmp_path):
     assert from_yaml.fingerprint() == from_json.fingerprint()
 
 
-def test_shipped_default_config_is_valid():
-    cfg = load_config("config/default.yaml")
+def test_packaged_template_is_valid():
+    """The reference config lives in the package, so it is never user-edited."""
+    cfg = load_config(template_path())
     assert len(cfg.channels) == 3
     assert [c.emission_nm for c in cfg.channels] == [421, 519, 617]
 
@@ -161,10 +168,47 @@ def test_advisories_do_not_affect_the_fingerprint_path():
     assert cfg.fingerprint()
 
 
-def test_shipped_config_targets_an_aqueous_mount():
-    cfg = load_config("config/default.yaml")
+def test_packaged_template_targets_an_aqueous_mount():
+    cfg = load_config(template_path())
     assert cfg.optics.sample_ri == pytest.approx(1.40)
     assert cfg.optics.particle_depth_um > 0
+
+
+def test_write_template_produces_a_loadable_copy(tmp_path):
+    destination = write_template(tmp_path / "config" / "my_study.yaml")
+    assert destination.is_file()
+    assert load_config(destination).fingerprint() == load_config(template_path()).fingerprint()
+
+
+def test_write_template_refuses_to_clobber(tmp_path):
+    destination = write_template(tmp_path / "cfg.yaml")
+    destination.write_text("channels: [{name: mine, emission_nm: 500}]")
+    with pytest.raises(ConfigError, match="already exists"):
+        write_template(destination)
+    # The user's edits survive.
+    assert "mine" in destination.read_text()
+    write_template(destination, overwrite=True)
+    assert "mine" not in destination.read_text()
+
+
+def test_double_quoted_windows_path_gets_an_actionable_message(tmp_path):
+    """PyYAML's own wording ('8 hexadecimal numbers') explains nothing."""
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        'input:\n  directory: "C:\\Users\\lucas\\Bureau\\data"\n'
+        "channels:\n  - {name: a, emission_nm: 519}\n"
+    )
+    with pytest.raises(ConfigError, match="DOUBLE quotes"):
+        load_config(path)
+
+
+def test_single_quoted_windows_path_loads(tmp_path):
+    path = tmp_path / "good.yaml"
+    path.write_text(
+        "input:\n  directory: 'C:\\Users\\lucas\\Bureau\\data'\n"
+        "channels:\n  - {name: a, emission_nm: 519}\n"
+    )
+    assert load_config(path).input.directory == "C:\\Users\\lucas\\Bureau\\data"
 
 
 def test_missing_file():
