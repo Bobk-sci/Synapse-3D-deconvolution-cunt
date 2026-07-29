@@ -128,6 +128,28 @@ def test_chance_control_is_reported(tmp_path):
     assert chance["excitatory"]["chance_mean"] < result.synapses["n_excitatory"]
 
 
+def test_control_pair_is_measured_in_every_run(tmp_path):
+    """PSD-95 vs Gephyrin is on different synapses: it is the empirical null.
+
+    Measuring it used to take a second run with the roles permuted, which meant
+    nobody measured it. The statistical behaviour of the ratio is covered in
+    test_colocalization; what matters here is that the pair is profiled at all.
+    """
+    path = make_stack(tmp_path, n_exc=14, n_inh=12, n_orphan=10)
+    result = count_stack(make_config(tmp_path), path)
+    profiles = result.synapses["apposition_profile"]
+    assert profiles["control"]["observed"], "the control pair must be profiled"
+    assert "specific_enrichment" in profiles["excitatory"]
+    assert "specific_enrichment" in profiles["inhibitory"]
+
+
+def test_specific_enrichment_has_a_summary_column(tmp_path):
+    path = make_stack(tmp_path, n_exc=14, n_inh=12, n_orphan=10)
+    row = count_stack(make_config(tmp_path), path).summary_row()
+    assert "specific_enrichment_excitatory" in row
+    assert "specific_enrichment_inhibitory" in row
+
+
 def test_no_puncta_is_flagged_not_silent(tmp_path):
     empty = np.full((3, 20, 100, 100), 20, dtype=np.uint16)
     path = tmp_path / "empty.ome.tif"

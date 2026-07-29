@@ -53,7 +53,9 @@ SUMMARY_COLUMNS = [
     "n_synapses_excitatory", "n_synapses_inhibitory", "n_synapses_total",
     "density_presynaptic", "density_post_excitatory", "density_post_inhibitory",
     "density_excitatory", "density_inhibitory", "density_total",
-    "fraction_pre_paired", "median_distance_exc_um", "median_distance_inh_um",
+    "fraction_pre_paired",
+    "specific_enrichment_excitatory", "specific_enrichment_inhibitory",
+    "median_distance_exc_um", "median_distance_inh_um",
     "n_ambiguous_resolved", "warnings",
 ]
 
@@ -90,6 +92,11 @@ class CountResult:
         n_inh = self.per_channel.get(inh, {}).get("n_in_roi", 0)
         s_exc = self.synapses.get("n_excitatory", 0)
         s_inh = self.synapses.get("n_inhibitory", 0)
+        profiles = self.synapses.get("apposition_profile", {})
+
+        def profile_at(key: str) -> Any:
+            value = profiles.get(key, {}).get("specific_at_tolerance")
+            return "" if value is None else value
 
         return {
             "image": self.source.name,
@@ -110,6 +117,12 @@ class CountResult:
             "fraction_pre_paired": round(
                 (s_exc + s_inh) / n_pre if n_pre else float("nan"), 4
             ),
+            # How much closer the pair is than the two postsynaptic markers are
+            # to each other. Near 1 means the count is a proximity artefact, and
+            # comparing such counts across groups compares labelling density,
+            # not synapses.
+            "specific_enrichment_excitatory": profile_at("excitatory"),
+            "specific_enrichment_inhibitory": profile_at("inhibitory"),
             "median_distance_exc_um": self.synapses.get("median_distance_exc_um", ""),
             "median_distance_inh_um": self.synapses.get("median_distance_inh_um", ""),
             "n_ambiguous_resolved": self.synapses.get("n_ambiguous_resolved", 0),
@@ -120,6 +133,79 @@ class CountResult:
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+
+#: Below this, a synaptic pair is not measurably closer than two markers that
+#: merely share the neuropile, and its count is not evidence of apposition.
+_MIN_SPECIFIC_ENRICHMENT = 1.25
+
+
+def specific_enrichment(profile: dict, control: dict) -> list[float | None]:
+    """Enrichment of a synaptic pair relative to the non-specific floor.
+
+    ``profile`` and ``control`` must come from the same stack, so that the
+    shared spatial support cancels: the control pair is subject to exactly the
+    same neuropile clustering as the synaptic pair, and is the only null
+    available that carries it. A ratio of 1 means the "synaptic" pair is no
+    closer than two markers that are known not to be apposed.
+    """
+    if not profile.get("enrichment") or not control.get("enrichment"):
+        return []
+    return [
+        round(float(e / c), 3) if (e is not None and c) else None
+        for e, c in zip(profile["enrichment"], control["enrichment"])
+    ]
+
+
+def _log_specific_enrichment(
+    profiles: dict[str, dict],
+    pre_name: str,
+    exc_name: str,
+    inh_name: str,
+    tolerance_um: float,
+    result: CountResult,
+) -> None:
+    """Report each synaptic pair against the postsynaptic control pair."""
+    control = profiles.get("control", {})
+    if not control.get("observed"):
+        return
+
+    cells = [
+        f"r<={r:.2f}:x{e:g}"
+        for r, e in zip(control["radius_um"], control["enrichment"])
+        if e is not None
+    ][:6]
+    logger.info(
+        "  apposition %s vs %s [CONTROL -- different synapses, must not be "
+        "apposed]: %s", exc_name, inh_name, "  ".join(cells) or "too few puncta",
+    )
+
+    radii = control["radius_um"]
+    at_tolerance = int(np.argmin(np.abs(np.array(radii) - tolerance_um)))
+    for key, post_name in (("excitatory", exc_name), ("inhibitory", inh_name)):
+        ratios = specific_enrichment(profiles.get(key, {}), control)
+        if not ratios:
+            continue
+        profiles[key]["specific_enrichment"] = ratios
+        cells = [f"r<={r:.2f}:x{s:g}" for r, s in zip(radii, ratios)
+                 if s is not None][:6]
+        logger.info("  specific enrichment %s vs %s (above the control pair): %s",
+                    pre_name, post_name, "  ".join(cells) or "too few puncta")
+
+        value = ratios[at_tolerance] if at_tolerance < len(ratios) else None
+        if value is None:
+            usable = [s for s in ratios if s is not None]
+            value = usable[0] if usable else None
+        profiles[key]["specific_at_tolerance"] = value
+        if value is not None and value < _MIN_SPECIFIC_ENRICHMENT:
+            result.warnings.append(
+                f"{key}: {pre_name}/{post_name} is only {value:g}x closer than the "
+                f"{exc_name}/{inh_name} control pair, which is on different synapses "
+                "and should show no apposition at all. The raw enrichment against the "
+                "randomised null is inflated by both markers sharing the neuropile; "
+                "corrected for that, this pair shows no specific apposition and its "
+                "synapse count should be reported as an upper bound, not as a count"
+            )
+
 
 def _load_roi_mask(path: str, shape: tuple[int, int, int]) -> np.ndarray:
     """Read an optional ROI mask and check it matches the stack."""
@@ -392,6 +478,21 @@ def count_stack(cfg: Config, source: Path) -> CountResult:
                         "count -- check the marker assignment and the detection "
                         "threshold before trusting these numbers"
                     )
+
+        # The two postsynaptic markers sit on DIFFERENT synapses, so this pair
+        # must not be apposed. Whatever enrichment it still shows is the
+        # non-specific floor of the measurement: both markers live in the
+        # neuropile and avoid the same cell bodies and vessels, so they are
+        # neighbours far more often than the null predicts. The null randomises
+        # by translating one channel, which preserves each channel's own
+        # clustering but not the fact that the two share a support -- it cannot
+        # see this floor, and every enrichment above is inflated by it.
+        profiles["control"] = nearest_neighbour_profile(
+            detections[exc_name].centroids_um, detections[inh_name].centroids_um,
+            extent, n_randomisations=coloc.chance_randomisations,
+        )
+        _log_specific_enrichment(profiles, pre_name, exc_name, inh_name,
+                                 coloc.tolerance_um, result)
 
     result.synapses = {
         "chance": chance,

@@ -259,3 +259,98 @@ def test_apposition_profile_handles_too_few_puncta():
     profile = nearest_neighbour_profile(np.zeros((3, 3)), np.zeros((3, 3)), extent)
     assert profile["observed"] == []
     assert profile["radius_um"]
+
+
+# --------------------------------------------------------------------------
+# The non-specific floor
+# --------------------------------------------------------------------------
+
+EXTENT = np.array([10.0, 40.0, 40.0])       # um, a field the size of a real one
+
+
+def _neuropile_cloud(rng, n, envelope_um=8.0):
+    """Points concentrated in the middle of the field, as markers really are.
+
+    No marker is uniformly distributed over a field: they fill the neuropile
+    and are absent from cell bodies and vessels. Every channel shares that
+    support, whether or not the channels are biologically related.
+    """
+    centre = EXTENT / 2
+    points = rng.normal(centre, [envelope_um / 4, envelope_um, envelope_um], size=(n, 3))
+    return np.clip(points, 0.5, EXTENT - 0.5)
+
+
+def test_translated_null_is_fooled_by_a_shared_support():
+    """Three unrelated clouds in the same subvolume all look 'enriched'.
+
+    The null translates one channel, which preserves its internal clustering
+    but moves it off the support the two channels really share. It therefore
+    under-counts coincidences, and reports an enrichment for point sets that
+    are statistically independent.
+    """
+    rng = np.random.default_rng(0)
+    pre = _neuropile_cloud(rng, 1500)
+    post = _neuropile_cloud(rng, 1500)
+
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=5)
+    usable = [e for e in profile["enrichment"] if e is not None]
+    assert usable, "the field must be large enough for the profile to be defined"
+    assert usable[0] > 1.5, (
+        "independent clouds sharing a support must expose the flaw in the null"
+    )
+
+
+def test_specific_enrichment_cancels_the_shared_support():
+    """Ratio to a control pair drawn the same way returns to 1."""
+    from synapse_deconv.counting import specific_enrichment
+
+    rng = np.random.default_rng(1)
+    pre = _neuropile_cloud(rng, 1500)
+    post = _neuropile_cloud(rng, 1500)
+    control_a = _neuropile_cloud(rng, 1500)
+    control_b = _neuropile_cloud(rng, 1500)
+
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=5)
+    control = nearest_neighbour_profile(control_a, control_b, EXTENT, n_randomisations=5)
+    ratios = [s for s in specific_enrichment(profile, control) if s is not None]
+
+    assert ratios
+    assert ratios[0] == pytest.approx(1.0, abs=0.35), (
+        "nothing is apposed here, so the corrected enrichment must be ~1"
+    )
+
+
+def test_specific_enrichment_still_sees_real_apposition():
+    """Real pairs on top of the same shared support stay detectable."""
+    from synapse_deconv.counting import specific_enrichment
+
+    rng = np.random.default_rng(2)
+    pre = _neuropile_cloud(rng, 1500)
+    post = _neuropile_cloud(rng, 1300)
+    # 200 genuine partners, one cleft away from a presynaptic punctum.
+    partners = pre[rng.choice(len(pre), 200, replace=False)]
+    partners = partners + rng.normal(0, 0.05, size=partners.shape)
+    post = np.vstack([post, partners])
+
+    control = nearest_neighbour_profile(
+        _neuropile_cloud(rng, 1500), _neuropile_cloud(rng, 1500),
+        EXTENT, n_randomisations=5,
+    )
+    profile = nearest_neighbour_profile(pre, post, EXTENT, n_randomisations=5)
+    ratios = [s for s in specific_enrichment(profile, control) if s is not None]
+
+    assert ratios[0] > 1.5, "a real apposed population must survive the correction"
+
+
+def test_specific_enrichment_is_elementwise_and_skips_missing_bins():
+    from synapse_deconv.counting import specific_enrichment
+
+    profile = {"enrichment": [4.0, 3.0, None, 2.0]}
+    control = {"enrichment": [4.0, 1.5, 2.0, None]}
+    assert specific_enrichment(profile, control) == [1.0, 2.0, None, None]
+
+
+def test_specific_enrichment_of_an_empty_profile_is_empty():
+    from synapse_deconv.counting import specific_enrichment
+
+    assert specific_enrichment({"enrichment": []}, {"enrichment": [1.0]}) == []

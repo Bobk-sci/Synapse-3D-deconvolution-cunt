@@ -215,6 +215,22 @@ colocalization:
   # pour mesurer combien de paires la tolerance donne par pure coincidence a
   # cette densite. A REGARDER : si le hasard depasse 25 % de l'observe, le
   # comptage est un majorant, pas une mesure.
+  #
+  # ATTENTION a la limite de ce controle. La translation conserve le
+  # regroupement interne du canal deplace, mais pas le fait que les deux canaux
+  # occupent le MEME sous-volume : tous les marqueurs sont dans le neuropile et
+  # absents des corps cellulaires et des vaisseaux. Deux nuages de points
+  # statistiquement independants partageant ce support affichent deja un
+  # enrichissement de x2 a x2.6 contre ce nul. Tout enrichissement brut est donc
+  # gonfle par ce plancher non specifique.
+  #
+  # Le pipeline mesure donc aussi la paire post-excitateur / post-inhibiteur :
+  # elle est sur des synapses DIFFERENTES, donc jamais apposee, et son
+  # enrichissement residuel EST ce plancher, mesure dans le meme tissu. Le
+  # rapport (paire synaptique / paire controle) est reporte comme
+  # "specific enrichment" dans le log et dans summary.csv. C'est lui qu'il faut
+  # lire, pas l'enrichissement brut. Proche de 1 = le comptage mesure la densite
+  # de marquage, pas des synapses.
   chance_randomisations: 10
   presynaptic: Bassoon
   postsynaptic_excitatory: PSD95
