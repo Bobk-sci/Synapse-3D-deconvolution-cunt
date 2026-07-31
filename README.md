@@ -29,7 +29,7 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-python -m pytest                      # 130 tests
+python -m pytest                      # 200 tests
 ```
 
 Si `Activate.ps1` est bloqué (« l'exécution de scripts est désactivée ») :
@@ -690,7 +690,7 @@ synapse_deconv/
 scripts/
   make_test_stack.py          génère un stack synthétique à vérité connue
   validate_against_truth.py   mesure FWHM et conservation d'intensité
-tests/                        130 tests
+tests/                        200 tests
 ```
 
 Chaque module est utilisable seul :
